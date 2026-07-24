@@ -26,10 +26,10 @@ func DefaultConfig() *Config {
 		DaemonPort:   8080,
 		ProviderKeys: make(map[string]string),
 		Models: map[string]string{
-			"brain":      "sonnet",
-			"diagnostic": "sonnet",
-			"fixer":      "sonnet",
-			"reviewer":   "sonnet",
+			"brain":      "deepseek-v4-pro",
+			"diagnostic": "deepseek-v4-flash",
+			"fixer":      "deepseek-v4-flash",
+			"reviewer":   "deepseek-v4-flash",
 		},
 	}
 }
