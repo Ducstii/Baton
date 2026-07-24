@@ -525,14 +525,11 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 		return
 	}
 
-	// Success.
+	// Success — keep worktree for inspection.
 	_ = graph.SetStatus(node.ID, taskgraph.StatusCompleted)
+	node.WorktreePath = wt.Path()
 	d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusCompleted)
-
-	// Best-effort cleanup of the worktree on success.
-	if err := wt.Remove(); err != nil {
-		log.Printf("run %s: warning: worktree remove %s: %v", runID, node.ID, err)
-	}
+	log.Printf("run %s: fixer %s completed, worktree: %s", runID, node.ID, wt.Path())
 }
 
 // finalizeRun sets the run status to completed or failed based on graph stats
