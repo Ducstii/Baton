@@ -142,24 +142,24 @@ func (d *Daemon) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-		id, err := generateID()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "failed to generate run ID")
-			return
-		}
-		run := &Run{
-			ID:               id,
-			ProjectPath:      req.ProjectPath,
-			InputType:        req.InputType,
-			InputSource:      req.InputSource,
-			TargetAgentCount: req.TargetAgentCount,
-			ModelMapping:     req.ModelMapping,
-			Status:           StatusDiagnosing,
-			WorkUnits:        WorkUnitStats{},
-			Sessions:         []SessionInfo{},
-			CreatedAt:        time.Now(),
-			UpdatedAt:        time.Now(),
-		}
+	id, err := generateID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "failed to generate run ID")
+		return
+	}
+	run := &Run{
+		ID:               id,
+		ProjectPath:      req.ProjectPath,
+		InputType:        req.InputType,
+		InputSource:      req.InputSource,
+		TargetAgentCount: req.TargetAgentCount,
+		ModelMapping:     req.ModelMapping,
+		Status:           StatusDiagnosing,
+		WorkUnits:        WorkUnitStats{},
+		Sessions:         []SessionInfo{},
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}
 
 	if err := d.runs.Add(run); err != nil {
 		writeError(w, http.StatusConflict, "conflict", err.Error())

@@ -145,23 +145,23 @@ var (
 			Padding(0, 1)
 
 	CardSelectedStyle = lipgloss.NewStyle().
-			Background(Card).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(Accent).
-			Padding(0, 1)
+				Background(Card).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(Accent).
+				Padding(0, 1)
 
 	GroupHeaderStyle = lipgloss.NewStyle().
-			Foreground(Dim).
-			Bold(true).
-			Padding(0, 1)
+				Foreground(Dim).
+				Bold(true).
+				Padding(0, 1)
 
 	MenuItemStyle = lipgloss.NewStyle().
 			Padding(0, 2).
 			Foreground(Text)
 
 	MenuItemDangerStyle = lipgloss.NewStyle().
-			Padding(0, 2).
-			Foreground(Red)
+				Padding(0, 2).
+				Foreground(Red)
 
 	ViewportStyle = lipgloss.NewStyle().
 			Padding(0, 1)

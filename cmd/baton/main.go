@@ -74,7 +74,7 @@ func main() {
 		fmt.Printf("Daemon running at %s\n", daemonURL)
 		<-sigCh
 		if daemonProc != nil {
-			daemonProc.Stop()
+			_ = daemonProc.Stop()
 		}
 		return
 	}
@@ -82,7 +82,7 @@ func main() {
 	go func() {
 		<-sigCh
 		if daemonProc != nil {
-			daemonProc.Stop()
+			_ = daemonProc.Stop()
 		}
 		os.Exit(0)
 	}()

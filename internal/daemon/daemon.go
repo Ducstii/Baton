@@ -87,12 +87,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	buf, err := json.Marshal(v)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal encoding error"})
+		_, _ = w.Write([]byte(`{"error":"internal encoding error"}`))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	w.Write(buf)
+	_, _ = w.Write(buf)
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

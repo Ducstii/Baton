@@ -43,12 +43,12 @@ type Model struct {
 	groups   []SessionGroup
 	cursor   int
 
-	collapsed map[string]bool
-	expanded  map[string]bool
-	showMenu  bool
+	collapsed  map[string]bool
+	expanded   map[string]bool
+	showMenu   bool
 	menuTarget string
-	loading   bool
-	err       error
+	loading    bool
+	err        error
 
 	inputMode bool
 	inputText string
