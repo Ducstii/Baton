@@ -52,6 +52,7 @@ type Session struct {
 type MessageInfo struct {
 	Role    string `json:"role"`
 	Created string `json:"created"`
+	Finish  string `json:"finish,omitempty"`
 }
 
 // Part is a typed content fragment within a message.
