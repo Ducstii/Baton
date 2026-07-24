@@ -1,5 +1,4 @@
-// Package opencode wraps the opencode serve REST API for programmatic session
-// dispatch. It uses only the standard library.
+// Package opencode wraps the opencode serve REST API for programmatic session dispatch.
 package opencode
 
 import (
@@ -21,17 +20,12 @@ const DefaultBaseURL = "http://127.0.0.1:4096"
 // fallback heartbeat.
 const heartbeatInterval = 15 * time.Second
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 // Model identifies a language model provider and model ID.
 type Model struct {
 	ID         string `json:"id"`
 	ProviderID string `json:"providerID"`
 }
 
-// Session represents an opencode conversation session.
 // TokenCounts tracks token usage for a session.
 type TokenCounts struct {
 	Input     int        `json:"input"`
@@ -46,6 +40,7 @@ type CacheStats struct {
 	Write int `json:"write"`
 }
 
+// Session represents an opencode conversation session.
 type Session struct {
 	ID     string      `json:"id"`
 	Model  *Model      `json:"model,omitempty"`
@@ -105,10 +100,6 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("opencode: %s (HTTP %d)", e.Status, e.StatusCode)
 }
 
-// ---------------------------------------------------------------------------
-// Client
-// ---------------------------------------------------------------------------
-
 // Client is an HTTP client for the opencode serve REST API.
 type Client struct {
 	baseURL string
@@ -128,13 +119,7 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// internal request helpers
-// ---------------------------------------------------------------------------
-
-// do sends an HTTP request, optionally marshals body as JSON, and optionally
-// decodes the JSON response into result. The caller must close the response
-// body when result is nil and body is not a 204.
+// do sends an HTTP request, optionally marshaling body as JSON and decoding the response.
 func (c *Client) do(ctx context.Context, method, path string, body, result interface{}) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -178,11 +163,6 @@ func (c *Client) do(ctx context.Context, method, path string, body, result inter
 	return resp, nil
 }
 
-// ---------------------------------------------------------------------------
-// Session lifecycle
-// ---------------------------------------------------------------------------
-
-// createSessionRequest is the JSON body for POST /api/session.
 type createSessionRequest struct {
 	Model    Model       `json:"model"`
 	Location apiLocation `json:"location"`
@@ -212,7 +192,6 @@ func (c *Client) CreateSession(dir string, modelID, providerID string) (*Session
 	return &wrapper.Data, nil
 }
 
-// promptAsyncRequest is the JSON body for POST /session/{id}/prompt_async.
 type promptAsyncRequest struct {
 	Model promptModel `json:"model"`
 	Parts []Part      `json:"parts"`
@@ -250,7 +229,6 @@ func (c *Client) GetMessages(sessionID string) ([]Message, error) {
 	return msgs, nil
 }
 
-// summarizeRequest is the JSON body for POST /session/{id}/summarize.
 type summarizeRequest struct {
 	ProviderID string `json:"providerID"`
 	ModelID    string `json:"modelID"`
@@ -269,10 +247,6 @@ func (c *Client) Summarize(sessionID string, providerID, modelID string) error {
 	resp.Body.Close()
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Monitoring
-// ---------------------------------------------------------------------------
 
 // Health returns the daemon health status.
 func (c *Client) Health() (*HealthStatus, error) {
@@ -294,12 +268,7 @@ func (c *Client) SessionStatus() (map[string]SessionState, error) {
 	return st, nil
 }
 
-// SubscribeEvents opens an SSE stream for the given session and returns a
-// channel of events and a channel of errors. The caller must consume from both
-// channels until the context is cancelled.
-//
-// If no event is received for 15 seconds a synthetic "heartbeat" event is
-// emitted containing the current session status map.
+// SubscribeEvents opens an SSE stream, returning event and error channels.
 func (c *Client) SubscribeEvents(ctx context.Context, sessionID string) (<-chan Event, <-chan error) {
 	events := make(chan Event)
 	errs := make(chan error, 1)
@@ -393,10 +362,6 @@ func (c *Client) subscribeEvents(ctx context.Context, sessionID string, events c
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Permissions
-// ---------------------------------------------------------------------------
-
 // PendingPermissions lists all pending permission requests.
 func (c *Client) PendingPermissions() ([]PermissionRequest, error) {
 	var reqs []PermissionRequest
@@ -407,7 +372,6 @@ func (c *Client) PendingPermissions() ([]PermissionRequest, error) {
 	return reqs, nil
 }
 
-// permissionReply is the JSON body for POST /api/session/{id}/permission/{reqId}/reply.
 type permissionReply struct {
 	Action string `json:"action"`
 }

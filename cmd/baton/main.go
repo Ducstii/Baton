@@ -27,7 +27,6 @@ func main() {
 
 	client := opencode.NewClient(*baseURL)
 
-	// Verify OpenCode is reachable.
 	health, err := client.Health()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "OpenCode not reachable at %s: %v\n", *baseURL, err)
@@ -35,7 +34,6 @@ func main() {
 	}
 	fmt.Printf("OpenCode %s reachable\n", health.Version)
 
-	// Change to repo directory.
 	origDir, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "getwd: %v\n", err)
@@ -47,7 +45,6 @@ func main() {
 	}
 	defer os.Chdir(origDir)
 
-	// Create an isolated worktree.
 	wtBase := *repoDir + "-baton-worktrees"
 	runID := fmt.Sprintf("m2-%d", time.Now().Unix())
 	wt, err := worktree.Create(wtBase, runID, "fix-1")
@@ -58,7 +55,6 @@ func main() {
 	defer wt.Remove()
 	fmt.Printf("Worktree: %s (branch: %s)\n", wt.Path(), wt.Branch)
 
-	// Create the fixer session in the worktree.
 	session, err := client.CreateSession(wt.Path(), *modelID, *providerID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create session: %v\n", err)
@@ -66,7 +62,6 @@ func main() {
 	}
 	fmt.Printf("Session: %s\n", session.ID)
 
-	// Dispatch the fix prompt asynchronously.
 	fullPrompt := fmt.Sprintf(
 		"You are a bug fixer working in a git worktree. Fix the following issue. "+
 			"Make the minimal change needed. Do not refactor unrelated code. "+
@@ -79,7 +74,6 @@ func main() {
 	}
 	fmt.Println("Prompt dispatched, waiting for completion...")
 
-	// Subscribe to events.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -114,14 +108,12 @@ func main() {
 		}
 	}
 
-	// Poll for final messages.
 	msgs, err := client.GetMessages(session.ID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "get messages: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Show the assistant's final response.
 	for _, msg := range msgs {
 		if msg.Info.Role == "assistant" {
 			for _, part := range msg.Parts {
@@ -132,7 +124,6 @@ func main() {
 		}
 	}
 
-	// Show the diff.
 	fmt.Println("\n--- Git Diff ---")
 	diffCmd := exec.Command("git", "-C", wt.Path(), "diff")
 	diffOut, _ := diffCmd.CombinedOutput()

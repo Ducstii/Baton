@@ -14,19 +14,14 @@ type Worktree struct {
 	Branch string
 }
 
-// sanitizeBranchSegment replaces slashes in a segment with hyphens to produce
-// a git-safe branch name component.
 func sanitizeBranchSegment(s string) string {
 	return strings.ReplaceAll(s, "/", "-")
 }
 
-// Create creates a new git worktree at basePath/{runID}/{workUnitID}.
-// It creates a new branch named baton/{runID}/{workUnitID}.
-// The parent repository is determined from the current working directory.
+// Create creates a new git worktree and branch at basePath/{runID}/{workUnitID}.
 func Create(basePath, runID, workUnitID string) (*Worktree, error) {
 	worktreePath := filepath.Join(basePath, runID, workUnitID)
 
-	// Check if the worktree path already exists.
 	if _, err := os.Stat(worktreePath); err == nil {
 		return nil, fmt.Errorf("worktree path already exists: %s", worktreePath)
 	}
