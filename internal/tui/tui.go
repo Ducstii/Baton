@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Ducstii/Baton/internal/opencode"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
