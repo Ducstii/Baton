@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -191,6 +192,7 @@ func (d *Daemon) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // runDiagnosticPhase runs the diagnostic agent, builds the task graph from the
 // resulting work units, and transitions the run to awaiting_checkpoint.
 func (d *Daemon) runDiagnosticPhase(runID string, req CreateRunRequest) {
+	log.Println("DIAG: goroutine started, runID=", runID)
 	run, ok := d.runs.Get(runID)
 	if !ok {
 		return
@@ -508,6 +510,16 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 	}
 	if !result.Success {
 		log.Printf("run %s: fixer for %s reported failure: %s", runID, node.ID, result.Summary)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
+		return
+	}
+
+	// Verify changes were actually made.
+	diffCmd := exec.Command("git", "-C", wt.Path(), "diff", "--stat")
+	diffOut, _ := diffCmd.CombinedOutput()
+	if len(diffOut) == 0 {
+		log.Printf("run %s: fixer for %s reported success but no changes in worktree", runID, node.ID)
 		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return

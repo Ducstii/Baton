@@ -41,22 +41,23 @@ func RunFixer(client *opencode.Client, worktreePath string, workUnit WorkUnitGro
 		issueLines = append(issueLines, "- "+issueID)
 	}
 
-	prompt := fmt.Sprintf(`You are a code fixer. Fix the following issues in the codebase with minimal, surgical changes.
+	prompt := fmt.Sprintf(`You are a code fixer working in a git worktree. Fix the following issues. You MUST use file editing tools (Write, Edit) to modify the files — do not just describe the changes. Make the actual edits.
 
 Work Unit: %s
 Description: %s
 Issues:
 %s
 
-For each issue:
-- Make minimal, surgical changes — touch only what is necessary.
-- Run the build command after making changes if your environment supports it.
-- Run tests after making changes if your environment supports it.
+Instructions:
+1. Read the relevant files first.
+2. Use Edit or Write to make minimal changes. Touch only what is necessary.
+3. After all changes, run the build command if available.
+4. If tests exist, run them.
 
-After fixing, report the results as valid JSON with this exact structure and nothing else:
-{"success": true, "summary": "Fixed null pointer in UserService.login()", "changed_files": ["src/user/service.py"], "build_passed": true, "tests_passed": true}
+After completing ALL changes, respond with this JSON:
+{"success": true, "summary": "what you changed", "changed_files": ["file1.go"], "build_passed": true, "tests_passed": true}
 
-Respond ONLY with the JSON, no other text.`, workUnit.ID, workUnit.Description, strings.Join(issueLines, "\n"))
+Set success to false if you could not complete the changes. Respond ONLY with the JSON.`, workUnit.ID, workUnit.Description, strings.Join(issueLines, "\n"))
 
 	if err := client.PromptAsync(session.ID, providerID, modelID, prompt); err != nil {
 		return nil, fmt.Errorf("send prompt: %w", err)
