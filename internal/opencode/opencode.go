@@ -32,11 +32,25 @@ type Model struct {
 }
 
 // Session represents an opencode conversation session.
+// TokenCounts tracks token usage for a session.
+type TokenCounts struct {
+	Input     int        `json:"input"`
+	Output    int        `json:"output"`
+	Reasoning int        `json:"reasoning"`
+	Cache     CacheStats `json:"cache"`
+}
+
+// CacheStats tracks cache read/write counts.
+type CacheStats struct {
+	Read  int `json:"read"`
+	Write int `json:"write"`
+}
+
 type Session struct {
-	ID     string `json:"id"`
-	Model  *Model `json:"model,omitempty"`
-	CWD    string `json:"cwd,omitempty"`
-	Tokens int    `json:"tokens,omitempty"`
+	ID     string      `json:"id"`
+	Model  *Model      `json:"model,omitempty"`
+	Dir    string      `json:"directory,omitempty"`
+	Tokens TokenCounts `json:"tokens,omitempty"`
 }
 
 // MessageInfo contains metadata about a message.
@@ -168,28 +182,34 @@ func (c *Client) do(ctx context.Context, method, path string, body, result inter
 // Session lifecycle
 // ---------------------------------------------------------------------------
 
-// createSessionRequest is the JSON body for POST /session.
+// createSessionRequest is the JSON body for POST /api/session.
 type createSessionRequest struct {
-	CWD   string `json:"cwd"`
-	Model Model  `json:"model"`
+	Model    Model       `json:"model"`
+	Location apiLocation `json:"location"`
 }
 
-// CreateSession creates a new session. modelID and providerID identify the
-// language model to use.
-func (c *Client) CreateSession(cwd string, modelID, providerID string) (*Session, error) {
+type apiLocation struct {
+	Directory string `json:"directory"`
+}
+
+// CreateSession creates a new session at the given directory.
+func (c *Client) CreateSession(dir string, modelID, providerID string) (*Session, error) {
 	body := createSessionRequest{
-		CWD: cwd,
 		Model: Model{
 			ID:         modelID,
 			ProviderID: providerID,
 		},
+		Location: apiLocation{Directory: dir},
 	}
-	var sess Session
-	_, err := c.do(context.Background(), http.MethodPost, "/session", &body, &sess)
+	// /api/session wraps responses in {data: ...}
+	var wrapper struct {
+		Data Session `json:"data"`
+	}
+	_, err := c.do(context.Background(), http.MethodPost, "/api/session", &body, &wrapper)
 	if err != nil {
 		return nil, err
 	}
-	return &sess, nil
+	return &wrapper.Data, nil
 }
 
 // promptAsyncRequest is the JSON body for POST /session/{id}/prompt_async.
