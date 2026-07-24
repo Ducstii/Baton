@@ -12,11 +12,11 @@ import (
 
 // RunStatus values.
 const (
-	StatusDiagnosing       = "diagnosing"
+	StatusDiagnosing         = "diagnosing"
 	StatusAwaitingCheckpoint = "awaiting_checkpoint"
-	StatusInProgress       = "in_progress"
-	StatusCompleted        = "completed"
-	StatusFailed           = "failed"
+	StatusInProgress         = "in_progress"
+	StatusCompleted          = "completed"
+	StatusFailed             = "failed"
 )
 
 // WorkUnitStats tracks work unit progress for a run.
