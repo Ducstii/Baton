@@ -517,7 +517,7 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 	}
 
 	// Success.
-	graph.SetStatus(node.ID, taskgraph.StatusCompleted)
+	_ = graph.SetStatus(node.ID, taskgraph.StatusCompleted)
 	d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusCompleted)
 
 	// Best-effort cleanup of the worktree on success.
