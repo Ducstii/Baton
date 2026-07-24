@@ -144,9 +144,7 @@ func parseDiagnosticResult(data []byte) (*DiagnosticResult, error) {
 
 // RunDiagnostic creates an OpenCode session, sends a diagnostic prompt, waits
 // for the model to finish, and returns the parsed structured result.
-func RunDiagnostic(client *opencode.Client, input, inputType, providerID, modelID string) (*DiagnosticResult, error) {
-	projectDir := "." // opencode serve resolves from its workspace root; caller should have CWD set.
-
+func RunDiagnostic(client *opencode.Client, projectDir, input, inputType, providerID, modelID string) (*DiagnosticResult, error) {
 	session, err := client.CreateSession(projectDir, modelID, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)

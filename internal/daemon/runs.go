@@ -198,10 +198,7 @@ func (d *Daemon) runDiagnosticPhase(runID string, req CreateRunRequest) {
 
 	providerID, modelID := d.getModelForRun(run, "diagnostic")
 
-	origDir, _ := os.Getwd()
-	_ = os.Chdir(run.ProjectPath)
-	result, err := agents.RunDiagnostic(d.ocClient, req.Input.Content, req.Input.Type, providerID, modelID)
-	_ = os.Chdir(origDir)
+	result, err := agents.RunDiagnostic(d.ocClient, run.ProjectPath, req.Input.Content, req.Input.Type, providerID, modelID)
 	if err != nil {
 		log.Printf("run %s: diagnostic failed: %v", runID, err)
 		run.Status = StatusFailed
@@ -479,13 +476,13 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
+	defer func() { _ = os.Chdir(origDir) }()
 	if err := os.Chdir(run.ProjectPath); err != nil {
 		log.Printf("run %s: chdir %s: %v", runID, run.ProjectPath, err)
 		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
-	defer func() { _ = os.Chdir(origDir) }()
 
 	// Create an isolated git worktree for this fixer.
 	wt, err := worktree.Create(d.wtBasePath, runID, node.ID)
