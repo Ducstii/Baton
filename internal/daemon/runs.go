@@ -46,8 +46,7 @@ type SessionInfo struct {
 type Run struct {
 	ID               string            `json:"id"`
 	ProjectPath      string            `json:"project_path"`
-	InputType        string            `json:"input_type"`
-	InputSource      string            `json:"input_source"`
+	Input            RunInput          `json:"input"`
 	TargetAgentCount int               `json:"target_agent_count"`
 	ModelMapping     map[string]string `json:"model_mapping"`
 	Status           string            `json:"status"`
@@ -60,10 +59,17 @@ type Run struct {
 // CreateRunRequest is the JSON body for POST /runs.
 type CreateRunRequest struct {
 	ProjectPath      string            `json:"project_path"`
-	InputType        string            `json:"input_type"`
-	InputSource      string            `json:"input_source"`
+	Input            RunInput          `json:"input"`
 	TargetAgentCount int               `json:"target_agent_count"`
 	ModelMapping     map[string]string `json:"model_mapping"`
+}
+
+// RunInput describes the input for a diagnostic run.
+type RunInput struct {
+	Type    string `json:"type"`
+	Source  string `json:"source"`
+	Path    string `json:"path,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 // RunStore is an in-memory, concurrency-safe store for runs.
@@ -156,8 +162,7 @@ func (d *Daemon) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	run := &Run{
 		ID:               id,
 		ProjectPath:      req.ProjectPath,
-		InputType:        req.InputType,
-		InputSource:      req.InputSource,
+		Input:            req.Input,
 		TargetAgentCount: req.TargetAgentCount,
 		ModelMapping:     req.ModelMapping,
 		Status:           StatusDiagnosing,
@@ -193,7 +198,10 @@ func (d *Daemon) runDiagnosticPhase(runID string, req CreateRunRequest) {
 
 	providerID, modelID := d.getModelForRun(run, "diagnostic")
 
-	result, err := agents.RunDiagnostic(d.ocClient, req.InputSource, req.InputType, providerID, modelID)
+	origDir, _ := os.Getwd()
+	_ = os.Chdir(run.ProjectPath)
+	result, err := agents.RunDiagnostic(d.ocClient, req.Input.Content, req.Input.Type, providerID, modelID)
+	_ = os.Chdir(origDir)
 	if err != nil {
 		log.Printf("run %s: diagnostic failed: %v", runID, err)
 		run.Status = StatusFailed
