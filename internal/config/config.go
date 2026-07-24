@@ -35,9 +35,13 @@ func DefaultConfig() *Config {
 }
 
 // Parse reads and parses a TOML config file at path.
+// Returns nil, nil if the file does not exist.
 func Parse(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
 

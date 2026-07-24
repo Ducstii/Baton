@@ -17,6 +17,7 @@ import (
 
 func main() {
 	harnessMode := flag.Bool("harness", false, "run dev harness mode")
+	daemonOnly := flag.Bool("daemon", false, "run daemon only (no TUI)")
 	repoDir := flag.String("repo", "", "repository path (harness mode)")
 	prompt := flag.String("prompt", "", "fix prompt (harness mode)")
 	providerID := flag.String("provider", "deepseek", "provider ID")
@@ -30,16 +31,17 @@ func main() {
 
 	cfgPath := config.ConfigPath()
 	cfg, err := config.Parse(cfgPath)
-	if os.IsNotExist(err) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+	if cfg == nil {
 		cfg = config.DefaultConfig()
 		cfg.Token = generateToken()
 		if err := cfg.Save(cfgPath); err != nil {
 			fmt.Fprintf(os.Stderr, "save config: %v\n", err)
 			os.Exit(1)
 		}
-	} else if err != nil {
-		fmt.Fprintf(os.Stderr, "config: %v\n", err)
-		os.Exit(1)
 	}
 
 	daemonURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.DaemonPort)
@@ -55,6 +57,13 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	if *daemonOnly {
+		fmt.Printf("Daemon running at %s (token: %s)\n", daemonURL, cfg.Token)
+		<-sigCh
+		return
+	}
+
 	go func() {
 		<-sigCh
 		os.Exit(0)
