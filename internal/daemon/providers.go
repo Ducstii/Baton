@@ -7,9 +7,9 @@ import (
 
 // ProviderInfo describes an AI provider that Baton can use.
 type ProviderInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Configured  bool   `json:"configured"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Configured bool   `json:"configured"`
 }
 
 // ConfigureProviderRequest is the JSON body for POST /providers/configure.

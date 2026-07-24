@@ -27,8 +27,8 @@ func runHarness(repoDir, prompt, providerID, modelID string) {
 	fmt.Printf("OpenCode %s reachable\n", health.Version)
 
 	origDir, _ := os.Getwd()
-	os.Chdir(repoDir)
-	defer os.Chdir(origDir)
+	_ = os.Chdir(repoDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	wtBase := repoDir + "-baton-worktrees"
 	runID := fmt.Sprintf("m2-%d", time.Now().Unix())
@@ -37,7 +37,7 @@ func runHarness(repoDir, prompt, providerID, modelID string) {
 		fmt.Fprintf(os.Stderr, "worktree create: %v\n", err)
 		os.Exit(1)
 	}
-	defer wt.Remove()
+	defer func() { _ = wt.Remove() }()
 	fmt.Printf("Worktree: %s (branch: %s)\n", wt.Path(), wt.Branch)
 
 	session, err := client.CreateSession(wt.Path(), modelID, providerID)

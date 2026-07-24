@@ -94,7 +94,7 @@ func TestCreatePathAlreadyExists(t *testing.T) {
 
 	origDir, _ := os.Getwd() //nolint:errcheck
 	os.Chdir(repoDir)        //nolint:errcheck
-	defer os.Chdir(origDir)   //nolint:errcheck
+	defer os.Chdir(origDir)  //nolint:errcheck
 
 	basePath := filepath.Join(repoDir, "worktrees")
 	targetPath := filepath.Join(basePath, "run-existing", "unit-existing")
@@ -113,7 +113,7 @@ func TestSanitizeBranchSegment(t *testing.T) {
 
 	origDir, _ := os.Getwd() //nolint:errcheck
 	os.Chdir(repoDir)        //nolint:errcheck
-	defer os.Chdir(origDir)   //nolint:errcheck
+	defer os.Chdir(origDir)  //nolint:errcheck
 
 	wt, err := Create(repoDir, "run/a/b", "unit/c")
 	if err != nil {
