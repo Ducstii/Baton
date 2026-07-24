@@ -23,10 +23,10 @@ const (
 type Node struct {
 	ID           string    `json:"id"`
 	Description  string    `json:"description"`
-	Issues       []string  `json:"issues"`        // issue IDs this work unit addresses
+	Issues       []string  `json:"issues"` // issue IDs this work unit addresses
 	Status       string    `json:"status"`
-	BlockedBy    []string  `json:"blocked_by"`    // node IDs this depends on
-	Blocks       []string  `json:"blocks"`        // node IDs that depend on this
+	BlockedBy    []string  `json:"blocked_by"` // node IDs this depends on
+	Blocks       []string  `json:"blocks"`     // node IDs that depend on this
 	SessionID    string    `json:"session_id,omitempty"`
 	WorktreePath string    `json:"worktree_path,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`

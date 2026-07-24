@@ -17,29 +17,29 @@ func TestExtractJSON(t *testing.T) {
 			want:  `{"issues": [], "work_units": []}`,
 		},
 		{
-			name: "fenced with json marker",
+			name:  "fenced with json marker",
 			input: "```json\n{\"issues\": [{\"id\": \"i1\"}], \"work_units\": []}\n```",
-			want: `{"issues": [{"id": "i1"}], "work_units": []}`,
+			want:  `{"issues": [{"id": "i1"}], "work_units": []}`,
 		},
 		{
-			name: "fenced without language",
+			name:  "fenced without language",
 			input: "```\n{\"success\": true}\n```",
-			want: `{"success": true}`,
+			want:  `{"success": true}`,
 		},
 		{
-			name: "text before and after",
+			name:  "text before and after",
 			input: "Here is the result:\n\n```json\n{\"issues\": []}\n```\nDone.",
-			want: `{"issues": []}`,
+			want:  `{"issues": []}`,
 		},
 		{
-			name: "json in text without fences",
+			name:  "json in text without fences",
 			input: `The result is {"success": false, "summary": "nope"} and that's it.`,
-			want: `{"success": false, "summary": "nope"}`,
+			want:  `{"success": false, "summary": "nope"}`,
 		},
 		{
-			name: "nested braces",
+			name:  "nested braces",
 			input: `{"issues": [{"id": "i1", "suspected_files": ["a.go", "b.go"]}], "work_units": [{"id": "wu_01", "description": "fix", "issues": ["i1"]}]}`,
-			want: `{"issues": [{"id": "i1", "suspected_files": ["a.go", "b.go"]}], "work_units": [{"id": "wu_01", "description": "fix", "issues": ["i1"]}]}`,
+			want:  `{"issues": [{"id": "i1", "suspected_files": ["a.go", "b.go"]}], "work_units": [{"id": "wu_01", "description": "fix", "issues": ["i1"]}]}`,
 		},
 		{
 			name:     "empty string",
@@ -260,9 +260,9 @@ func TestParseFixerResult(t *testing.T) {
 			},
 		},
 		{
-			name:    "malformed JSON",
-			input:   `{bad data`,
-			wantOK:  false,
+			name:   "malformed JSON",
+			input:  `{bad data`,
+			wantOK: false,
 		},
 	}
 

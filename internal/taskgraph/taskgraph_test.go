@@ -151,10 +151,10 @@ func TestAddNodeBlockedByCycleChain(t *testing.T) {
 
 func TestReadyNodes(t *testing.T) {
 	g := NewGraph()
-	_ = g.AddNode(newNode("a"))                // no deps -> ready
-	_ = g.AddNode(newNode("b", "a"))           // depends on a
-	_ = g.AddNode(newNode("c", "a"))           // depends on a
-	_ = g.AddNode(newNode("d", "b", "c"))      // depends on b and c
+	_ = g.AddNode(newNode("a"))           // no deps -> ready
+	_ = g.AddNode(newNode("b", "a"))      // depends on a
+	_ = g.AddNode(newNode("c", "a"))      // depends on a
+	_ = g.AddNode(newNode("d", "b", "c")) // depends on b and c
 
 	ready := g.ReadyNodes()
 	if len(ready) != 1 || ready[0].ID != "a" {

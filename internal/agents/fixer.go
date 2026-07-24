@@ -11,11 +11,11 @@ import (
 
 // FixerResult is the output from a fixer session.
 type FixerResult struct {
-	Success     bool     `json:"success"`
-	Summary     string   `json:"summary"`
+	Success      bool     `json:"success"`
+	Summary      string   `json:"summary"`
 	ChangedFiles []string `json:"changed_files"`
-	BuildPassed bool     `json:"build_passed"`
-	TestsPassed bool     `json:"tests_passed"`
+	BuildPassed  bool     `json:"build_passed"`
+	TestsPassed  bool     `json:"tests_passed"`
 }
 
 // parseFixerResult unmarshals raw JSON into a FixerResult.
