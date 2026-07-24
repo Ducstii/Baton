@@ -465,7 +465,7 @@ func (d *Daemon) runFixerPhase(runID string) {
 func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgraph.Node, providerID, modelID string) {
 	run, ok := d.runs.Get(runID)
 	if !ok {
-		graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
@@ -475,13 +475,13 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 	origDir, err := os.Getwd()
 	if err != nil {
 		log.Printf("run %s: getwd: %v", runID, err)
-		graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
 	if err := os.Chdir(run.ProjectPath); err != nil {
 		log.Printf("run %s: chdir %s: %v", runID, run.ProjectPath, err)
-		graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
@@ -491,7 +491,7 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 	wt, err := worktree.Create(d.wtBasePath, runID, node.ID)
 	if err != nil {
 		log.Printf("run %s: worktree create for %s: %v", runID, node.ID, err)
-		graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
@@ -505,13 +505,13 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 	result, err := agents.RunFixer(d.ocClient, wt.Path(), wu, providerID, modelID)
 	if err != nil {
 		log.Printf("run %s: fixer for %s: %v", runID, node.ID, err)
-		graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
 	if !result.Success {
 		log.Printf("run %s: fixer for %s reported failure: %s", runID, node.ID, result.Summary)
-		graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
