@@ -140,7 +140,7 @@ func (c *Config) Save(path string) error {
 			buf.WriteString(fmt.Sprintf("%s = %q\n", k, v))
 		}
 	}
-	return os.WriteFile(path, []byte(buf.String()), 0644)
+	return os.WriteFile(path, []byte(buf.String()), 0600)
 }
 
 func expandPath(path string) string {

@@ -59,7 +59,7 @@ func (d *Daemon) registerRoutes() {
 
 // Start starts the HTTP server on the configured port. Blocks until Stop is called.
 func (d *Daemon) Start() error {
-	addr := fmt.Sprintf(":%d", d.config.DaemonPort)
+	addr := fmt.Sprintf("127.0.0.1:%d", d.config.DaemonPort)
 	d.server = &http.Server{
 		Addr:    addr,
 		Handler: d.mux,
@@ -84,9 +84,15 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "internal encoding error"})
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	w.Write(buf)
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

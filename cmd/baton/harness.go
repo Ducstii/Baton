@@ -26,8 +26,15 @@ func runHarness(repoDir, prompt, providerID, modelID string) {
 	}
 	fmt.Printf("OpenCode %s reachable\n", health.Version)
 
-	origDir, _ := os.Getwd()
-	_ = os.Chdir(repoDir)
+	origDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "getwd: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		fmt.Fprintf(os.Stderr, "chdir %s: %v\n", repoDir, err)
+		os.Exit(1)
+	}
 	defer func() { _ = os.Chdir(origDir) }()
 
 	wtBase := repoDir + "-baton-worktrees"
@@ -37,7 +44,11 @@ func runHarness(repoDir, prompt, providerID, modelID string) {
 		fmt.Fprintf(os.Stderr, "worktree create: %v\n", err)
 		os.Exit(1)
 	}
-	defer func() { _ = wt.Remove() }()
+	defer func() {
+		if err := wt.Remove(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: worktree remove: %v\n", err)
+		}
+	}()
 	fmt.Printf("Worktree: %s (branch: %s)\n", wt.Path(), wt.Branch)
 
 	session, err := client.CreateSession(wt.Path(), modelID, providerID)
@@ -111,7 +122,10 @@ func runHarness(repoDir, prompt, providerID, modelID string) {
 
 	fmt.Println("\n--- Git Diff ---")
 	diffCmd := exec.Command("git", "-C", wt.Path(), "diff")
-	diffOut, _ := diffCmd.CombinedOutput()
+	diffOut, diffErr := diffCmd.CombinedOutput()
+	if diffErr != nil {
+		fmt.Fprintf(os.Stderr, "git diff failed: %v\n%s\n", diffErr, diffOut)
+	}
 	fmt.Println(string(diffOut))
 
 	if len(diffOut) > 0 {

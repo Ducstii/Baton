@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Ducstii/Baton/internal/config"
 	"github.com/Ducstii/Baton/internal/daemon"
@@ -44,28 +45,45 @@ func main() {
 		}
 	}
 
+	if cfg.Token == "" {
+		cfg.Token = generateToken()
+		if err := cfg.Save(cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "save config: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	daemonURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.DaemonPort)
 
+	var daemonProc *daemon.Daemon
 	if !isDaemonRunning(daemonURL) {
-		d := daemon.New(cfg)
+		daemonProc = daemon.New(cfg)
 		go func() {
-			if err := d.Start(); err != nil {
+			if err := daemonProc.Start(); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
+				os.Exit(1)
 			}
 		}()
+		waitForDaemon(daemonURL, 3*time.Second)
 	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	if *daemonOnly {
-		fmt.Printf("Daemon running at %s (token: %s)\n", daemonURL, cfg.Token)
+		fmt.Printf("Daemon running at %s\n", daemonURL)
 		<-sigCh
+		if daemonProc != nil {
+			daemonProc.Stop()
+		}
 		return
 	}
 
 	go func() {
 		<-sigCh
+		if daemonProc != nil {
+			daemonProc.Stop()
+		}
 		os.Exit(0)
 	}()
 
@@ -75,8 +93,24 @@ func main() {
 	}
 }
 
+func waitForDaemon(url string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func isDaemonRunning(url string) bool {
-	resp, err := http.Get(url + "/health")
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url + "/health")
 	if err != nil {
 		return false
 	}
@@ -86,6 +120,8 @@ func isDaemonRunning(url string) bool {
 
 func generateToken() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand: %v", err))
+	}
 	return "baton-" + hex.EncodeToString(b)
 }

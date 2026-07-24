@@ -118,12 +118,12 @@ func (s *RunStore) Set(id string, run *Run) {
 }
 
 // generateID returns a short random hex string suitable for run IDs.
-func generateID() string {
+func generateID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+		return "", fmt.Errorf("generate id: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func (d *Daemon) handleListRuns(w http.ResponseWriter, r *http.Request) {
@@ -142,19 +142,24 @@ func (d *Daemon) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run := &Run{
-		ID:               generateID(),
-		ProjectPath:      req.ProjectPath,
-		InputType:        req.InputType,
-		InputSource:      req.InputSource,
-		TargetAgentCount: req.TargetAgentCount,
-		ModelMapping:     req.ModelMapping,
-		Status:           StatusDiagnosing,
-		WorkUnits:        WorkUnitStats{},
-		Sessions:         []SessionInfo{},
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
-	}
+		id, err := generateID()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to generate run ID")
+			return
+		}
+		run := &Run{
+			ID:               id,
+			ProjectPath:      req.ProjectPath,
+			InputType:        req.InputType,
+			InputSource:      req.InputSource,
+			TargetAgentCount: req.TargetAgentCount,
+			ModelMapping:     req.ModelMapping,
+			Status:           StatusDiagnosing,
+			WorkUnits:        WorkUnitStats{},
+			Sessions:         []SessionInfo{},
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+		}
 
 	if err := d.runs.Add(run); err != nil {
 		writeError(w, http.StatusConflict, "conflict", err.Error())
