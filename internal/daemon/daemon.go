@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Ducstii/Baton/internal/config"
+	"github.com/Ducstii/Baton/internal/opencode"
+	"github.com/Ducstii/Baton/internal/taskgraph"
 )
 
 const Version = "0.1.0"
@@ -22,10 +27,26 @@ type Daemon struct {
 	sseBroker  *SSEBroker
 	server     *http.Server
 	startTime  time.Time
+
+	ocClient    *opencode.Client
+	wtBasePath  string
+	taskGraphs  map[string]*taskgraph.Graph
+	taskGraphMu sync.RWMutex
 }
 
-// New creates a new Daemon with routes registered.
-func New(cfg *config.Config) *Daemon {
+// New creates a new Daemon with routes registered and the M4 orchestration
+// client wired in.
+func New(cfg *config.Config, ocClient *opencode.Client) *Daemon {
+	wtBasePath := cfg.WorktreeBasePath
+	if wtBasePath == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			wtBasePath = filepath.Join(home, ".baton", "worktrees")
+		} else {
+			wtBasePath = filepath.Join(os.TempDir(), "baton", "worktrees")
+		}
+	}
+
 	d := &Daemon{
 		config:     cfg,
 		configPath: config.ConfigPath(),
@@ -34,6 +55,9 @@ func New(cfg *config.Config) *Daemon {
 		projects:   NewProjectStore(),
 		sseBroker:  NewSSEBroker(),
 		startTime:  time.Now(),
+		ocClient:   ocClient,
+		wtBasePath: wtBasePath,
+		taskGraphs: make(map[string]*taskgraph.Graph),
 	}
 	d.registerRoutes()
 	return d

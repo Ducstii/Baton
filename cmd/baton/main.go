@@ -13,6 +13,7 @@ import (
 
 	"github.com/Ducstii/Baton/internal/config"
 	"github.com/Ducstii/Baton/internal/daemon"
+	"github.com/Ducstii/Baton/internal/opencode"
 	"github.com/Ducstii/Baton/internal/tui"
 )
 
@@ -57,7 +58,8 @@ func main() {
 
 	var daemonProc *daemon.Daemon
 	if !isDaemonRunning(daemonURL) {
-		daemonProc = daemon.New(cfg)
+		ocClient := opencode.NewClient("")
+		daemonProc = daemon.New(cfg, ocClient)
 		go func() {
 			if err := daemonProc.Start(); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
