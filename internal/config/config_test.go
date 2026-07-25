@@ -10,11 +10,8 @@ func TestParse(t *testing.T) {
 daemon_port = 9090
 worktree_base_path = "/tmp/baton-worktrees"
 
-[models]
-brain = "opus"
-diagnostic = "sonnet"
-fixer = "haiku"
-reviewer = "sonnet"
+[providers]
+openai = "sk-..."
 `
 	path := tempConfig(t, content)
 
@@ -32,14 +29,8 @@ reviewer = "sonnet"
 	if cfg.Token != "" {
 		t.Errorf("Token = %q, want empty", cfg.Token)
 	}
-	if cfg.Models["brain"] != "opus" {
-		t.Errorf("Models[brain] = %q, want opus", cfg.Models["brain"])
-	}
-	if cfg.Models["fixer"] != "haiku" {
-		t.Errorf("Models[fixer] = %q, want haiku", cfg.Models["fixer"])
-	}
-	if cfg.Models["reviewer"] != "sonnet" {
-		t.Errorf("Models[reviewer] = %q, want sonnet", cfg.Models["reviewer"])
+	if cfg.ProviderKeys["openai"] != "sk-..." {
+		t.Errorf("ProviderKeys[openai] = %q, want %q", cfg.ProviderKeys["openai"], "sk-...")
 	}
 }
 
@@ -67,13 +58,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Token != "" {
 		t.Errorf("Token = %q, want empty", cfg.Token)
 	}
-	if len(cfg.Models) != 4 {
-		t.Errorf("len(Models) = %d, want 4", len(cfg.Models))
-	}
-	for _, role := range []string{"brain", "diagnostic", "fixer", "reviewer"} {
-		if _, ok := cfg.Models[role]; !ok {
-			t.Errorf("Models missing key %q", role)
-		}
+	if cfg.ProviderKeys == nil {
+		t.Error("ProviderKeys should be non-nil")
 	}
 }
 

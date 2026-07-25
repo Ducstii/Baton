@@ -1,78 +1,35 @@
 package daemon
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/Ducstii/Baton/internal/agents"
-	"github.com/Ducstii/Baton/internal/taskgraph"
-	"github.com/Ducstii/Baton/internal/worktree"
 )
 
 // RunStatus values.
 const (
-	StatusDiagnosing         = "diagnosing"
-	StatusAwaitingCheckpoint = "awaiting_checkpoint"
-	StatusInProgress         = "in_progress"
-	StatusCompleted          = "completed"
-	StatusFailed             = "failed"
+	StatusPending   = "pending"
+	StatusActive    = "active"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
 )
-
-// WorkUnitStats tracks work unit progress for a run.
-type WorkUnitStats struct {
-	Total      int `json:"total"`
-	Done       int `json:"done"`
-	InProgress int `json:"in_progress"`
-	Blocked    int `json:"blocked"`
-	Failed     int `json:"failed"`
-}
-
-// SessionInfo describes a session within a run.
-type SessionInfo struct {
-	ID      string `json:"id"`
-	AgentID string `json:"agent_id"`
-	Status  string `json:"status"`
-	Model   string `json:"model"`
-}
 
 // Run represents a single fix/feature run.
 type Run struct {
-	ID               string            `json:"id"`
-	ProjectPath      string            `json:"project_path"`
-	Input            RunInput          `json:"input"`
-	TargetAgentCount int               `json:"target_agent_count"`
-	ModelMapping     map[string]string `json:"model_mapping"`
-	Status           string            `json:"status"`
-	WorkUnits        WorkUnitStats     `json:"work_units"`
-	Sessions         []SessionInfo     `json:"sessions"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	ID          string    `json:"id"`
+	ProjectPath string    `json:"project_path"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // CreateRunRequest is the JSON body for POST /runs.
 type CreateRunRequest struct {
-	ProjectPath      string            `json:"project_path"`
-	Input            RunInput          `json:"input"`
-	TargetAgentCount int               `json:"target_agent_count"`
-	ModelMapping     map[string]string `json:"model_mapping"`
-}
-
-// RunInput describes the input for a diagnostic run.
-type RunInput struct {
-	Type    string `json:"type"`
-	Source  string `json:"source"`
-	Path    string `json:"path,omitempty"`
-	Content string `json:"content,omitempty"`
+	ProjectPath string `json:"project_path"`
 }
 
 // RunStore is an in-memory, concurrency-safe store for runs.
@@ -163,16 +120,11 @@ func (d *Daemon) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run := &Run{
-		ID:               id,
-		ProjectPath:      req.ProjectPath,
-		Input:            req.Input,
-		TargetAgentCount: req.TargetAgentCount,
-		ModelMapping:     req.ModelMapping,
-		Status:           StatusDiagnosing,
-		WorkUnits:        WorkUnitStats{},
-		Sessions:         []SessionInfo{},
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
+		ID:          id,
+		ProjectPath: req.ProjectPath,
+		Status:      StatusPending,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
 	if err := d.runs.Add(run); err != nil {
@@ -180,156 +132,7 @@ func (d *Daemon) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d.sseBroker.Publish(run.ID, SSEEvent{
-		Type: "run.created",
-		Data: run,
-	})
-
-	// Launch diagnostic phase in background.
-	go d.runDiagnosticPhase(id, req)
-
 	writeJSON(w, http.StatusCreated, run)
-}
-
-// runDiagnosticPhase dispatches the diagnostic agent via AgentRuntime, builds
-// the task graph from the resulting work units, and transitions the run to
-// awaiting_checkpoint.
-func (d *Daemon) runDiagnosticPhase(runID string, req CreateRunRequest) {
-	log.Println("DIAG: goroutine started, runID=", runID)
-	run, ok := d.runs.Get(runID)
-	if !ok {
-		return
-	}
-
-	providerID, modelID := d.getModelForRun(run, "diagnostic")
-
-	params := map[string]string{
-		"input":       req.Input.Content,
-		"input_type":  req.Input.Type,
-		"provider_id": providerID,
-		"model_id":    modelID,
-	}
-
-	instance, err := d.agentRuntime.DispatchAgent(context.Background(), "diagnostic", params)
-	if err != nil {
-		log.Printf("run %s: diagnostic dispatch failed: %v", runID, err)
-		run.Status = StatusFailed
-		run.UpdatedAt = time.Now()
-		d.runs.Set(runID, run)
-		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
-		return
-	}
-
-	// Wait for the agent to complete.
-	inst := d.agentRuntime.WaitForAgent(context.Background(), instance.ID)
-	if inst == nil {
-		log.Printf("run %s: diagnostic agent was cancelled or context expired", runID)
-		run.Status = StatusFailed
-		run.UpdatedAt = time.Now()
-		d.runs.Set(runID, run)
-		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
-		return
-	}
-	if inst.Status != agents.StatusCompleted {
-		log.Printf("run %s: diagnostic failed: %s", runID, inst.Error)
-		run.Status = StatusFailed
-		run.UpdatedAt = time.Now()
-		d.runs.Set(runID, run)
-		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
-		return
-	}
-
-	raw, ok := inst.Result.(string)
-	if !ok || raw == "" {
-		log.Printf("run %s: diagnostic returned no result data", runID)
-		run.Status = StatusFailed
-		run.UpdatedAt = time.Now()
-		d.runs.Set(runID, run)
-		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
-		return
-	}
-
-	result, err := agents.ParseDiagnosticResult([]byte(raw))
-	if err != nil {
-		log.Printf("run %s: parse diagnostic result: %v", runID, err)
-		run.Status = StatusFailed
-		run.UpdatedAt = time.Now()
-		d.runs.Set(runID, run)
-		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
-		return
-	}
-
-	// Build task graph from work units.
-	graph := taskgraph.NewGraph()
-	for _, wu := range result.WorkUnits {
-		node := &taskgraph.Node{
-			ID:          wu.ID,
-			Description: wu.Description,
-			Issues:      wu.Issues,
-			Status:      taskgraph.StatusPending,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-		if err := graph.AddNode(node); err != nil {
-			log.Printf("run %s: add node %s: %v", runID, wu.ID, err)
-			continue
-		}
-	}
-
-	// Build issue ID -> work unit ID map.
-	issueToWU := make(map[string]string, len(result.WorkUnits)*2)
-	for _, wu := range result.WorkUnits {
-		for _, issueID := range wu.Issues {
-			issueToWU[issueID] = wu.ID
-		}
-	}
-
-	// Build issue ID -> issue map.
-	issueMap := make(map[string]agents.DiagnosticIssue, len(result.Issues))
-	for _, issue := range result.Issues {
-		issueMap[issue.ID] = issue
-	}
-
-	// Add dependency edges between work units from issue dependency_edges.
-	for _, wu := range result.WorkUnits {
-		for _, issueID := range wu.Issues {
-			if di, ok := issueMap[issueID]; ok {
-				for _, depID := range di.DependencyEdges {
-					if depWU, ok := issueToWU[depID]; ok && depWU != wu.ID {
-						if err := graph.AddEdge(depWU, wu.ID); err != nil {
-							log.Printf("run %s: add edge %s->%s: %v", runID, depWU, wu.ID, err)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Store the graph.
-	d.taskGraphMu.Lock()
-	d.taskGraphs[runID] = graph
-	d.taskGraphMu.Unlock()
-
-	// Update run status and work unit stats.
-	run.Status = StatusAwaitingCheckpoint
-	run.UpdatedAt = time.Now()
-	run.WorkUnits = WorkUnitStats{
-		Total:   len(result.WorkUnits),
-		Done:    0,
-		Blocked: 0,
-		Failed:  0,
-	}
-	d.runs.Set(runID, run)
-
-	// Publish diagnostic complete event.
-	d.sseBroker.Publish(runID, SSEEvent{
-		Type: "diagnostic.complete",
-		Data: map[string]any{
-			"work_units": result.WorkUnits,
-			"issues":     result.Issues,
-		},
-	})
-	d.publishRunStatus(runID, StatusDiagnosing, StatusAwaitingCheckpoint)
 }
 
 func (d *Daemon) handleGetRun(w http.ResponseWriter, r *http.Request) {
@@ -383,67 +186,6 @@ func (d *Daemon) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (d *Daemon) handleCheckpointConfirm(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	run, ok := d.runs.Get(id)
-	if !ok {
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-		return
-	}
-	if run.Status != StatusAwaitingCheckpoint {
-		writeError(w, http.StatusBadRequest, "invalid_state",
-			"run is not awaiting checkpoint confirmation")
-		return
-	}
-	run.Status = StatusInProgress
-	run.UpdatedAt = time.Now()
-	d.runs.Set(id, run)
-	d.publishRunStatus(id, StatusAwaitingCheckpoint, StatusInProgress)
-
-	// Count ready nodes for the response.
-	d.taskGraphMu.RLock()
-	graph := d.taskGraphs[id]
-	d.taskGraphMu.RUnlock()
-
-	dispatchedCount := 0
-	if graph != nil {
-		dispatchedCount = len(graph.ReadyNodes())
-	}
-
-	// Launch fixer phase in background.
-	go d.runFixerPhase(id)
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":           run.Status,
-		"dispatched_count": dispatchedCount,
-	})
-}
-
-func (d *Daemon) handleCheckpointReject(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	run, ok := d.runs.Get(id)
-	if !ok {
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-		return
-	}
-	if run.Status != StatusAwaitingCheckpoint {
-		writeError(w, http.StatusBadRequest, "invalid_state",
-			"run is not awaiting checkpoint confirmation")
-		return
-	}
-	run.Status = StatusDiagnosing
-	run.UpdatedAt = time.Now()
-	d.runs.Set(id, run)
-	d.publishRunStatus(id, StatusAwaitingCheckpoint, StatusDiagnosing)
-
-	// Discard the task graph so re-diagnosis can rebuild it.
-	d.taskGraphMu.Lock()
-	delete(d.taskGraphs, id)
-	d.taskGraphMu.Unlock()
-
-	writeJSON(w, http.StatusOK, run)
-}
-
 type chatRequest struct {
 	Message string `json:"message"`
 }
@@ -489,253 +231,5 @@ func (d *Daemon) handleRunChat(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"response": response,
-	})
-}
-
-// runFixerPhase iteratively dispatches ready work units to fixer agents,
-// waiting for each wave to complete before checking for newly unblocked nodes.
-func (d *Daemon) runFixerPhase(runID string) {
-	d.taskGraphMu.RLock()
-	graph, ok := d.taskGraphs[runID]
-	d.taskGraphMu.RUnlock()
-	if !ok {
-		log.Printf("run %s: no task graph found", runID)
-		return
-	}
-
-	run, ok := d.runs.Get(runID)
-	if !ok {
-		return
-	}
-
-	providerID, modelID := d.getModelForRun(run, "fixer")
-
-	for {
-		readyNodes := graph.ReadyNodes()
-		if len(readyNodes) == 0 {
-			stats := graph.Stats()
-			if stats[taskgraph.StatusInProgress] == 0 {
-				break // nothing running, nothing pending -- all done
-			}
-			// Some nodes still in progress; wait before rechecking.
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		var wg sync.WaitGroup
-		for _, node := range readyNodes {
-			wg.Add(1)
-			n := node
-			if err := graph.SetStatus(n.ID, taskgraph.StatusInProgress); err != nil {
-				log.Printf("run %s: set status %s: %v", runID, n.ID, err)
-				wg.Done()
-				continue
-			}
-			d.publishTaskUpdate(runID, n.ID, taskgraph.StatusPending, taskgraph.StatusInProgress)
-
-			go func() {
-				defer wg.Done()
-				d.runOneFixer(runID, graph, n, providerID, modelID)
-			}()
-		}
-		wg.Wait()
-	}
-
-	d.finalizeRun(runID, graph)
-}
-
-// runOneFixer creates a git worktree, dispatches the fixer agent via
-// AgentRuntime, and updates the graph node status based on the result.
-func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgraph.Node, providerID, modelID string) {
-	run, ok := d.runs.Get(runID)
-	if !ok {
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	// Changing into the project directory is required for git worktree commands
-	// to run from a valid repository root.
-	origDir, err := os.Getwd()
-	if err != nil {
-		log.Printf("run %s: getwd: %v", runID, err)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-	defer func() { _ = os.Chdir(origDir) }()
-	if err := os.Chdir(run.ProjectPath); err != nil {
-		log.Printf("run %s: chdir %s: %v", runID, run.ProjectPath, err)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	// Create an isolated git worktree for this fixer.
-	wt, err := worktree.Create(d.wtBasePath, runID, node.ID)
-	if err != nil {
-		log.Printf("run %s: worktree create for %s: %v", runID, node.ID, err)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	// Build the issues string for the template.
-	var issueLines []string
-	for _, issueID := range node.Issues {
-		issueLines = append(issueLines, "- "+issueID)
-	}
-
-	params := map[string]string{
-		"work_unit_id":  node.ID,
-		"description":   node.Description,
-		"issues":        strings.Join(issueLines, "\n"),
-		"provider_id":   providerID,
-		"model_id":      modelID,
-		"worktree_path": wt.Path(),
-	}
-
-	instance, err := d.agentRuntime.DispatchAgent(context.Background(), "fixer", params)
-	if err != nil {
-		log.Printf("run %s: fixer dispatch for %s: %v", runID, node.ID, err)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	inst := d.agentRuntime.WaitForAgent(context.Background(), instance.ID)
-	if inst == nil {
-		log.Printf("run %s: fixer for %s was cancelled", runID, node.ID)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-	if inst.Status != agents.StatusCompleted {
-		log.Printf("run %s: fixer for %s failed: %s", runID, node.ID, inst.Error)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	raw, ok := inst.Result.(string)
-	if !ok || raw == "" {
-		log.Printf("run %s: fixer for %s returned no result data", runID, node.ID)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	result, err := agents.ParseFixerResult([]byte(raw))
-	if err != nil {
-		log.Printf("run %s: fixer parse result for %s: %v", runID, node.ID, err)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	if !result.Success {
-		log.Printf("run %s: fixer for %s reported failure: %s", runID, node.ID, result.Summary)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	// Verify changes were actually made.
-	diffCmd := exec.Command("git", "-C", wt.Path(), "diff", "--stat")
-	diffOut, _ := diffCmd.CombinedOutput()
-	if len(diffOut) == 0 {
-		log.Printf("run %s: fixer for %s reported success but no changes in worktree", runID, node.ID)
-		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
-		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
-		return
-	}
-
-	// Success -- keep worktree for inspection.
-	_ = graph.SetStatus(node.ID, taskgraph.StatusCompleted)
-	node.WorktreePath = wt.Path()
-	d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusCompleted)
-	log.Printf("run %s: fixer %s completed, worktree: %s", runID, node.ID, wt.Path())
-}
-
-// finalizeRun sets the run status to completed or failed based on graph stats
-// and publishes the final SSE event.
-func (d *Daemon) finalizeRun(runID string, graph *taskgraph.Graph) {
-	stats := graph.Stats()
-	nodes := graph.AllNodes()
-
-	run, ok := d.runs.Get(runID)
-	if !ok {
-		return
-	}
-
-	oldStatus := run.Status
-
-	if stats[taskgraph.StatusFailed] > 0 {
-		run.Status = StatusFailed
-	} else {
-		run.Status = StatusCompleted
-	}
-	run.UpdatedAt = time.Now()
-	run.WorkUnits = WorkUnitStats{
-		Total:   len(nodes),
-		Done:    stats[taskgraph.StatusCompleted],
-		Blocked: stats[taskgraph.StatusBlocked],
-		Failed:  stats[taskgraph.StatusFailed],
-	}
-	d.runs.Set(runID, run)
-
-	d.taskGraphMu.Lock()
-	delete(d.taskGraphs, runID)
-	d.taskGraphMu.Unlock()
-
-	d.publishRunStatus(runID, oldStatus, run.Status)
-}
-
-// getModelForRun returns the provider and model IDs for the given phase.
-// Priority: run.ModelMapping, config.Models, then hardcoded defaults.
-func (d *Daemon) getModelForRun(run *Run, phase string) (providerID, modelID string) {
-	if run.ModelMapping != nil {
-		if m, ok := run.ModelMapping[phase]; ok {
-			return "deepseek", m
-		}
-	}
-	if d.config.Models != nil {
-		if m, ok := d.config.Models[phase]; ok {
-			return "deepseek", m
-		}
-	}
-	switch phase {
-	case "diagnostic":
-		return "deepseek", "sonnet"
-	case "fixer":
-		return "deepseek", "sonnet"
-	default:
-		return "deepseek", "sonnet"
-	}
-}
-
-// publishRunStatus sends a run.status SSE event for the given run.
-func (d *Daemon) publishRunStatus(runID, oldStatus, newStatus string) {
-	d.sseBroker.Publish(runID, SSEEvent{
-		Type: "run.status",
-		Data: map[string]any{
-			"run_id":     runID,
-			"old_status": oldStatus,
-			"new_status": newStatus,
-			"timestamp":  time.Now(),
-		},
-	})
-}
-
-// publishTaskUpdate sends a taskgraph.update SSE event for a node status change.
-func (d *Daemon) publishTaskUpdate(runID, nodeID, oldStatus, newStatus string) {
-	d.sseBroker.Publish(runID, SSEEvent{
-		Type: "taskgraph.update",
-		Data: map[string]any{
-			"node_id":    nodeID,
-			"old_status": oldStatus,
-			"new_status": newStatus,
-			"timestamp":  time.Now(),
-		},
 	})
 }

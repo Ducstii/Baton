@@ -13,7 +13,6 @@ import (
 	"github.com/Ducstii/Baton/internal/agents"
 	"github.com/Ducstii/Baton/internal/config"
 	"github.com/Ducstii/Baton/internal/opencode"
-	"github.com/Ducstii/Baton/internal/taskgraph"
 )
 
 const Version = "0.1.0"
@@ -32,8 +31,6 @@ type Daemon struct {
 	ocClient     *opencode.Client
 	agentRuntime *agents.AgentRuntime
 	wtBasePath   string
-	taskGraphs   map[string]*taskgraph.Graph
-	taskGraphMu  sync.RWMutex
 
 	registry        *agents.Registry
 	brainSessions   map[string]*BrainSession
@@ -65,7 +62,6 @@ func New(cfg *config.Config, ocClient *opencode.Client) *Daemon {
 		startTime:     time.Now(),
 		ocClient:      ocClient,
 		wtBasePath:    wtBasePath,
-		taskGraphs:    make(map[string]*taskgraph.Graph),
 		registry:      reg,
 		brainSessions: make(map[string]*BrainSession),
 	}
@@ -81,8 +77,6 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("POST /runs", d.auth(d.handleCreateRun))
 	d.mux.HandleFunc("GET /runs/{id}", d.auth(d.handleGetRun))
 	d.mux.HandleFunc("GET /runs/{id}/events", d.auth(d.handleRunEvents))
-	d.mux.HandleFunc("POST /runs/{id}/checkpoint/confirm", d.auth(d.handleCheckpointConfirm))
-	d.mux.HandleFunc("POST /runs/{id}/checkpoint/reject", d.auth(d.handleCheckpointReject))
 	d.mux.HandleFunc("POST /runs/{id}/chat", d.auth(d.handleRunChat))
 
 	d.mux.HandleFunc("GET /projects", d.auth(d.handleListProjects))

@@ -718,12 +718,12 @@ func TestParseDiagnosticResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := parseDiagnosticResult([]byte(tt.input))
+			res, err := ParseDiagnosticResult([]byte(tt.input))
 			if tt.wantOK && err != nil {
-				t.Fatalf("parseDiagnosticResult: %v", err)
+				t.Fatalf("ParseDiagnosticResult: %v", err)
 			}
 			if !tt.wantOK && err == nil {
-				t.Fatal("parseDiagnosticResult: expected error, got nil")
+				t.Fatal("ParseDiagnosticResult: expected error, got nil")
 			}
 			if !tt.wantOK {
 				return
@@ -808,12 +808,12 @@ func TestParseFixerResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := parseFixerResult([]byte(tt.input))
+			res, err := ParseFixerResult([]byte(tt.input))
 			if tt.wantOK && err != nil {
-				t.Fatalf("parseFixerResult: %v", err)
+				t.Fatalf("ParseFixerResult: %v", err)
 			}
 			if !tt.wantOK && err == nil {
-				t.Fatal("parseFixerResult: expected error, got nil")
+				t.Fatal("ParseFixerResult: expected error, got nil")
 			}
 			if !tt.wantOK || tt.want == nil {
 				return

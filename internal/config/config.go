@@ -16,7 +16,6 @@ type Config struct {
 	DaemonPort       int               `json:"daemon_port"`
 	WorktreeBasePath string            `json:"worktree_base_path"`
 	Token            string            `json:"token"`
-	Models           map[string]string `json:"models"`
 	ProviderKeys     map[string]string `json:"provider_keys"`
 }
 
@@ -25,12 +24,6 @@ func DefaultConfig() *Config {
 	return &Config{
 		DaemonPort:   8080,
 		ProviderKeys: make(map[string]string),
-		Models: map[string]string{
-			"brain":      "deepseek-v4-pro",
-			"diagnostic": "deepseek-v4-flash",
-			"fixer":      "deepseek-v4-flash",
-			"reviewer":   "deepseek-v4-flash",
-		},
 	}
 }
 
@@ -83,11 +76,6 @@ func Parse(path string) (*Config, error) {
 			case "token":
 				cfg.Token = val
 			}
-		case "models":
-			if cfg.Models == nil {
-				cfg.Models = make(map[string]string)
-			}
-			cfg.Models[key] = val
 		case "providers":
 			if cfg.ProviderKeys == nil {
 				cfg.ProviderKeys = make(map[string]string)
@@ -127,12 +115,6 @@ func (c *Config) Save(path string) error {
 	}
 	if c.Token != "" {
 		buf.WriteString(fmt.Sprintf("token = %q\n", c.Token))
-	}
-	if len(c.Models) > 0 {
-		buf.WriteString("\n[models]\n")
-		for k, v := range c.Models {
-			buf.WriteString(fmt.Sprintf("%s = %q\n", k, v))
-		}
 	}
 	if len(c.ProviderKeys) > 0 {
 		buf.WriteString("\n[providers]\n")
