@@ -175,6 +175,32 @@ func DefaultTestWriter() AgentDefinition {
 	}
 }
 
+// DefaultBrain returns the built-in brain orchestrator agent definition.
+// The brain is not dispatched via AgentRuntime -- it is the persistent
+// orchestrator session. Its tools are custom (tool-call JSON blocks),
+// not OpenCode built-in tools.
+func DefaultBrain() AgentDefinition {
+	return AgentDefinition{
+		Name:        "brain",
+		Description: "Orchestrator agent that dispatches and coordinates subagents",
+		Model:       "deepseek-v4-pro",
+		Prompt: PromptConfig{
+			System:   "",
+			Template: "",
+		},
+		Tools: ToolsConfig{
+			Write:  false,
+			Edit:   false,
+			Bash:   "",
+			Search: false,
+			Read:   false,
+		},
+		Worktree:  WorktreeConfig{Required: false},
+		Timeout:   TimeoutConfig{MaxSeconds: 300},
+		Reporting: ReportingConfig{Format: "text"},
+	}
+}
+
 // builtinAgents returns all built-in agent definitions indexed by name.
 func builtinAgents() map[string]AgentDefinition {
 	defs := []AgentDefinition{

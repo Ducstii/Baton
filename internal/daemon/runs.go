@@ -444,15 +444,51 @@ func (d *Daemon) handleCheckpointReject(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, run)
 }
 
+type chatRequest struct {
+	Message string `json:"message"`
+}
+
 func (d *Daemon) handleRunChat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := d.runs.Get(id); !ok {
+	run, ok := d.runs.Get(id)
+	if !ok {
 		writeError(w, http.StatusNotFound, "not_found", "run not found")
 		return
 	}
 
+	var req chatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if req.Message == "" {
+		writeError(w, http.StatusBadRequest, "validation_error", "message is required")
+		return
+	}
+
+	// Get or create a brain session for this run.
+	d.brainSessionsMu.Lock()
+	brain, exists := d.brainSessions[id]
+	if !exists {
+		var err error
+		brain, err = NewBrainSession(d.ocClient, d.agentRuntime, d.registry, run.ProjectPath, "deepseek", "deepseek-v4-pro")
+		if err != nil {
+			d.brainSessionsMu.Unlock()
+			writeError(w, http.StatusInternalServerError, "brain_error", fmt.Sprintf("create brain session: %v", err))
+			return
+		}
+		d.brainSessions[id] = brain
+	}
+	d.brainSessionsMu.Unlock()
+
+	response, err := brain.SendMessage(r.Context(), req.Message)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "brain_error", err.Error())
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"message": "Chat is not yet implemented. This is a placeholder response.",
+		"response": response,
 	})
 }
 

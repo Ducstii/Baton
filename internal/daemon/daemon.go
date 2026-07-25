@@ -34,6 +34,10 @@ type Daemon struct {
 	wtBasePath   string
 	taskGraphs   map[string]*taskgraph.Graph
 	taskGraphMu  sync.RWMutex
+
+	registry        *agents.Registry
+	brainSessions   map[string]*BrainSession
+	brainSessionsMu sync.RWMutex
 }
 
 // New creates a new Daemon with routes registered, the M4 orchestration
@@ -49,19 +53,23 @@ func New(cfg *config.Config, ocClient *opencode.Client) *Daemon {
 		}
 	}
 
+	reg := agents.NewRegistry("")
+
 	d := &Daemon{
-		config:     cfg,
-		configPath: config.ConfigPath(),
-		mux:        http.NewServeMux(),
-		runs:       NewRunStore(),
-		projects:   NewProjectStore(),
-		sseBroker:  NewSSEBroker(),
-		startTime:  time.Now(),
-		ocClient:   ocClient,
-		wtBasePath: wtBasePath,
-		taskGraphs: make(map[string]*taskgraph.Graph),
+		config:        cfg,
+		configPath:    config.ConfigPath(),
+		mux:           http.NewServeMux(),
+		runs:          NewRunStore(),
+		projects:      NewProjectStore(),
+		sseBroker:     NewSSEBroker(),
+		startTime:     time.Now(),
+		ocClient:      ocClient,
+		wtBasePath:    wtBasePath,
+		taskGraphs:    make(map[string]*taskgraph.Graph),
+		registry:      reg,
+		brainSessions: make(map[string]*BrainSession),
 	}
-	d.agentRuntime = agents.NewAgentRuntime(ocClient, agents.NewRegistry(""), wtBasePath)
+	d.agentRuntime = agents.NewAgentRuntime(ocClient, reg, wtBasePath)
 	d.registerRoutes()
 	return d
 }
