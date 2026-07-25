@@ -171,4 +171,30 @@ var (
 			Border(lipgloss.NormalBorder(), true, false, false, false).
 			BorderForeground(Border).
 			Padding(0, 1)
+
+	// Pane border style (vertical separator between panes).
+	PaneBorderStyle = lipgloss.NewStyle().
+			Foreground(Border)
+
+	// Chat styles.
+	ChatInputStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true, false, false, false).
+			BorderForeground(Border)
+
+	ChatUserStyle = lipgloss.NewStyle().
+			Foreground(Accent).
+			Padding(0, 1)
+
+	ChatBrainStyle = lipgloss.NewStyle().
+			Foreground(Text).
+			Padding(0, 1)
+
+	ChatDimStyle = lipgloss.NewStyle().
+			Foreground(Dim).
+			Padding(0, 1)
+
+	// Agent expanded detail.
+	AgentExpandedStyle = lipgloss.NewStyle().
+				Foreground(Dim).
+				Padding(0, 2)
 )

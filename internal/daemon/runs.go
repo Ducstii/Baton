@@ -252,3 +252,40 @@ func (d *Daemon) handleRunHistory(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, messages)
 }
+
+// agentResponse is the JSON payload for agent instances exposed to the TUI.
+type agentResponse struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Status       string    `json:"status"`
+	WorktreePath string    `json:"worktree_path,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	CompletedAt  time.Time `json:"completed_at,omitempty"`
+	Error        string    `json:"error,omitempty"`
+}
+
+func (d *Daemon) handleRunAgents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := d.runs.Get(id); !ok {
+		writeError(w, http.StatusNotFound, "not_found", "run not found")
+		return
+	}
+
+	instances := d.agentRuntime.ListAgents()
+	agents := make([]agentResponse, 0, len(instances))
+	for _, inst := range instances {
+		a := agentResponse{
+			ID:           inst.ID,
+			Name:         inst.Name,
+			Status:       string(inst.Status),
+			WorktreePath: inst.WorktreePath,
+			StartedAt:    inst.StartedAt,
+			Error:        inst.Error,
+		}
+		if !inst.CompletedAt.IsZero() {
+			a.CompletedAt = inst.CompletedAt
+		}
+		agents = append(agents, a)
+	}
+	writeJSON(w, http.StatusOK, agents)
+}

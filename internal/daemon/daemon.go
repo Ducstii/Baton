@@ -84,6 +84,7 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /runs/{id}/events", d.auth(d.handleRunEvents))
 	d.mux.HandleFunc("POST /runs/{id}/chat", d.auth(d.handleRunChat))
 	d.mux.HandleFunc("GET /runs/{id}/history", d.auth(d.handleRunHistory))
+	d.mux.HandleFunc("GET /runs/{id}/agents", d.auth(d.handleRunAgents))
 
 	d.mux.HandleFunc("GET /projects", d.auth(d.handleListProjects))
 	d.mux.HandleFunc("POST /projects", d.auth(d.handleOpenProject))

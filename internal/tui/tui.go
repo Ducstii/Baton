@@ -13,21 +13,30 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// View identifies the active view.
-type View int
+// Pane identifies the active pane.
+type Pane int
 
 const (
-	ViewSessions View = iota
-	ViewRuns
+	PaneLeft Pane = iota
+	PaneRight
 )
 
+// RunSummary is a lightweight representation of a run for the TUI.
+type RunSummary struct {
+	ID          string    `json:"id"`
+	ProjectPath string    `json:"project_path"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // Message types for async operations.
-type runsLoadedMsg []Run
-type runCreatedMsg struct{}
+type runsLoadedMsg []RunSummary
 type errMsg struct{ error }
 type tickMsg struct{}
+type agentTickMsg struct{}
 
-// Model is the main Bubbletea model for the Baton TUI.
+// Model is the main Bubbletea model for the Baton TUI with a two-pane layout.
 type Model struct {
 	client    *http.Client
 	daemonURL string
@@ -35,23 +44,16 @@ type Model struct {
 
 	width, height int
 
-	activeView View
-	activeTab  int
+	// Panes
+	activePane Pane
+	agentList  AgentList
+	chatView   ChatView
 
-	sessions []Session
-	runs     []Run
-	groups   []SessionGroup
-	cursor   int
-
-	collapsed  map[string]bool
-	expanded   map[string]bool
-	showMenu   bool
-	menuTarget string
-	loading    bool
-	err        error
-
-	inputMode bool
-	inputText string
+	// Run state
+	runID   string
+	runs    []RunSummary
+	loading bool
+	err     error
 }
 
 // New creates a new Model.
@@ -65,15 +67,15 @@ func New(daemonURL, token string) *Model {
 		client:    &http.Client{Timeout: 30 * time.Second},
 		daemonURL: url,
 		token:     token,
-		collapsed: make(map[string]bool),
-		expanded:  make(map[string]bool),
+		agentList: NewAgentList(),
+		chatView:  NewChatView(),
 		loading:   true,
 	}
 }
 
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.fetchRuns(), m.pollTicker())
+	return tea.Batch(m.fetchRuns(), m.pollTicker(), m.pollAgentTicker())
 }
 
 func (m *Model) pollTicker() tea.Cmd {
@@ -82,374 +84,98 @@ func (m *Model) pollTicker() tea.Cmd {
 	})
 }
 
+func (m *Model) pollAgentTicker() tea.Cmd {
+	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+		return agentTickMsg{}
+	})
+}
+
+// hasRun checks if a run ID is in the current runs list.
+func (m *Model) hasRun(id string) bool {
+	for _, r := range m.runs {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// selectRun sets the current run and loads its agents and chat history.
+func (m *Model) selectRun() tea.Cmd {
+	if m.runID == "" {
+		return nil
+	}
+	return tea.Batch(
+		m.agentList.FetchAgents(m.daemonURL, m.token, m.runID),
+		m.chatView.LoadHistory(m.daemonURL, m.token, m.runID),
+	)
+}
+
 // Update implements tea.Model.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.chatView.input.Width = paneWidth(m.width, false) - 6
 		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 
 	case runsLoadedMsg:
-		m.runs = []Run(msg)
-		m.sessions = extractSessions(m.runs)
-		m.groups = groupSessions(m.sessions)
+		m.runs = []RunSummary(msg)
 		m.loading = false
 		m.err = nil
-		m.clampCursor()
+		// Auto-select the latest run if none selected or current run is gone.
+		if len(m.runs) > 0 {
+			if m.runID == "" || !m.hasRun(m.runID) {
+				m.runID = m.runs[0].ID
+				return m, m.selectRun()
+			}
+		} else {
+			m.runID = ""
+		}
 		return m, nil
 
-	case runCreatedMsg:
-		m.inputMode = false
-		m.inputText = ""
-		return m, m.fetchRuns()
+	case agentsLoadedMsg:
+		m.agentList.agents = []AgentInfo(msg)
+		return m, nil
+
+	case historyLoadedMsg:
+		m.chatView.messages = []ChatMessage(msg)
+		m.chatView.loading = false
+		m.chatView.scrollPos = len(m.chatView.messages)
+		return m, nil
+
+	case chatSentMsg:
+		m.chatView.loading = false
+		// Reload history to get the brain's response.
+		if m.runID != "" {
+			return m, m.chatView.LoadHistory(m.daemonURL, m.token, m.runID)
+		}
+		return m, nil
 
 	case tickMsg:
 		return m, tea.Batch(m.fetchRuns(), m.pollTicker())
+
+	case agentTickMsg:
+		if m.runID != "" {
+			return m, tea.Batch(
+				m.agentList.FetchAgents(m.daemonURL, m.token, m.runID),
+				m.pollAgentTicker(),
+			)
+		}
+		return m, m.pollAgentTicker()
 
 	case errMsg:
 		m.loading = false
 		m.err = msg.error
 		return m, nil
+
+	default:
+		return m, nil
 	}
-	return m, nil
-}
-
-// clampCursor ensures cursor is within valid range.
-func (m *Model) clampCursor() {
-	maxIdx := m.visibleSessionCount() - 1
-	if m.activeView == ViewRuns {
-		maxIdx = len(m.runs) - 1
-	}
-	if maxIdx < 0 {
-		m.cursor = 0
-		return
-	}
-	if m.cursor > maxIdx {
-		m.cursor = maxIdx
-	}
-}
-
-// visibleSessionCount returns the number of sessions in non-collapsed groups.
-func (m *Model) visibleSessionCount() int {
-	count := 0
-	for _, g := range m.groups {
-		if !m.collapsed["group:"+g.Status] {
-			count += len(g.Sessions)
-		}
-	}
-	return count
-}
-
-// sessionAtCursor returns the session at the current cursor position, accounting
-// for collapsed groups that hide their sessions from the visible list.
-func (m *Model) sessionAtCursor() (Session, bool) {
-	visIdx := 0
-	for _, g := range m.groups {
-		if m.collapsed["group:"+g.Status] {
-			continue
-		}
-		for _, s := range g.Sessions {
-			if visIdx == m.cursor {
-				return s, true
-			}
-			visIdx++
-		}
-	}
-	return Session{}, false
-}
-
-// View implements tea.Model.
-func (m *Model) View() string {
-	if m.width == 0 {
-		return "Initializing..."
-	}
-
-	if m.inputMode {
-		return m.inputView()
-	}
-
-	header := m.headerView()
-	tabs := m.tabsView()
-
-	var content string
-	if m.loading && m.visibleSessionCount() == 0 && len(m.runs) == 0 {
-		content = lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
-			lipgloss.NewStyle().Foreground(Dim).Render("Loading runs..."),
-		)
-	} else if m.err != nil && m.visibleSessionCount() == 0 && len(m.runs) == 0 {
-		errStr := fmt.Sprintf("Error: %v", m.err)
-		content = lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
-			lipgloss.NewStyle().Foreground(Red).Render(errStr),
-		)
-	} else {
-		switch m.activeView {
-		case ViewSessions:
-			content = m.sessionsView()
-		case ViewRuns:
-			content = m.runsView()
-		}
-	}
-
-	help := m.helpView()
-
-	// Pad to fill terminal height.
-	headerH := lipgloss.Height(header)
-	tabsH := lipgloss.Height(tabs)
-	helpH := lipgloss.Height(help)
-	contentH := lipgloss.Height(content)
-	statusH := headerH + tabsH
-	avail := m.height - statusH - 1
-	if avail < 0 {
-		avail = 0
-	}
-	pad := avail - contentH - helpH
-	if pad < 0 {
-		pad = 0
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Top, header, tabs) + "\n" + content + strings.Repeat("\n", pad) + help
-}
-
-// inputView renders a simple text input for creating a new run.
-func (m *Model) inputView() string {
-	s := lipgloss.JoinVertical(lipgloss.Top,
-		lipgloss.NewStyle().Bold(true).Foreground(Text).Render("New Run"),
-		"",
-		lipgloss.NewStyle().Foreground(Dim).Render("Run name:"),
-		m.inputText+"▌",
-		"",
-		lipgloss.NewStyle().Foreground(Dim).Render("Enter to create, Esc to cancel"),
-	)
-	return lipgloss.Place(m.width, m.height, lipgloss.Top, lipgloss.Top, s)
-}
-
-// headerView renders the top bar with title and active count.
-func (m *Model) headerView() string {
-	activeCount := 0
-	for _, s := range m.sessions {
-		if s.Status == "working" {
-			activeCount++
-		}
-	}
-	countStr := fmt.Sprintf("%d active", activeCount)
-
-	dot := lipgloss.NewStyle().Foreground(Accent).Render("●")
-	title := lipgloss.NewStyle().Bold(true).Foreground(Text).Render("Baton")
-	countStyle := lipgloss.NewStyle().Foreground(Dim).Render(countStr)
-
-	left := dot + " " + title + "  " + countStyle
-	right := lipgloss.NewStyle().Foreground(Dim).Render("[+]")
-
-	pad := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if pad < 0 {
-		pad = 0
-	}
-
-	return HeaderStyle.Width(m.width).Render(left + strings.Repeat(" ", pad) + right)
-}
-
-// tabsView renders the tab bar.
-func (m *Model) tabsView() string {
-	names := []string{"Sessions", "Runs"}
-	var tabs []string
-	for i, name := range names {
-		if i == m.activeTab {
-			tabs = append(tabs, TabActiveStyle.Render(name))
-		} else {
-			tabs = append(tabs, TabStyle.Render(name))
-		}
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
-}
-
-// sessionsView renders the session list grouped by status.
-func (m *Model) sessionsView() string {
-	var b strings.Builder
-	visIdx := 0
-
-	for _, g := range m.groups {
-		groupKey := "group:" + g.Status
-		collapsed := m.collapsed[groupKey]
-		icon := "▼"
-		if collapsed {
-			icon = "▶"
-		}
-
-		// Group header.
-		headerText := fmt.Sprintf("  %s  %s (%d)", icon, g.Title, len(g.Sessions))
-		b.WriteString(GroupHeaderStyle.Render(headerText))
-		b.WriteString("\n")
-
-		if collapsed {
-			continue
-		}
-
-		for _, s := range g.Sessions {
-			isSel := visIdx == m.cursor && m.activeView == ViewSessions
-			b.WriteString(m.renderSessionCard(s, isSel))
-			b.WriteString("\n")
-			visIdx++
-		}
-	}
-
-	if b.Len() == 0 && !m.loading {
-		b.WriteString(lipgloss.NewStyle().Foreground(Dim).Padding(0, 2).Render("No sessions found."))
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-// renderSessionCard renders a single session card.
-func (m *Model) renderSessionCard(s Session, selected bool) string {
-	var dotColor lipgloss.Color
-	switch s.Status {
-	case "working":
-		dotColor = Green
-	case "waiting":
-		dotColor = Yellow
-	case "idle":
-		dotColor = Dim
-	case "stopped":
-		dotColor = Red
-	}
-
-	dot := lipgloss.NewStyle().Foreground(dotColor).Render("●")
-	name := lipgloss.NewStyle().Bold(true).Foreground(Text).Render(s.Name)
-	dir := lipgloss.NewStyle().Foreground(Dim).Render(shortPath(s.Directory))
-	ts := lipgloss.NewStyle().Foreground(Dim).Render(timeAgo(s.UpdatedAt))
-
-	sel := " "
-	if selected {
-		sel = "▎"
-	}
-	selStyle := lipgloss.NewStyle().Foreground(Accent)
-
-	// Row 1: selection indicator, dot, status badge, name, provider, model.
-	row1Items := []string{
-		selStyle.Render(sel),
-		" ",
-		dot,
-		" ",
-		StatusBadge(s.Status),
-		" ",
-		name,
-	}
-	if s.Provider != "" {
-		row1Items = append(row1Items, "  ", RoleBadge(s.Provider))
-	}
-	if s.Model != "" {
-		modelStyle := lipgloss.NewStyle().Foreground(Cyan).Padding(0, 1)
-		row1Items = append(row1Items, modelStyle.Render(s.Model))
-	}
-	row1 := lipgloss.JoinHorizontal(lipgloss.Top, row1Items...)
-
-	// Row 2: directory and time.
-	row2 := "    " + dir + "  " + ts
-
-	cardContent := lipgloss.JoinVertical(lipgloss.Top, row1, row2)
-
-	// Expanded detail.
-	expandedKey := "session:" + s.ID
-	if m.expanded[expandedKey] {
-		detailStyle := lipgloss.NewStyle().Foreground(Dim).Padding(0, 1)
-		details := "\n" + detailStyle.Render("Run: "+shortID(s.RunID))
-		cardContent += details
-	}
-
-	cardWidth := m.width - 4
-	if cardWidth < 40 {
-		cardWidth = 40
-	}
-
-	if selected {
-		return CardSelectedStyle.Width(cardWidth).Render(cardContent)
-	}
-	return CardStyle.Width(cardWidth).Render(cardContent)
-}
-
-// runsView renders the runs list.
-func (m *Model) runsView() string {
-	var b strings.Builder
-	for i, r := range m.runs {
-		selected := i == m.cursor && m.activeView == ViewRuns
-		sel := "  "
-		if selected {
-			sel = "▎ "
-		}
-		idStr := shortID(r.ID)
-		name := r.InputSource
-		if name == "" {
-			name = idStr
-		}
-		status := mapStatus(r.Status)
-
-		line := lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Foreground(Accent).Render(sel),
-			StatusBadge(status),
-			" ",
-			lipgloss.NewStyle().Bold(true).Foreground(Text).Render(name),
-			"  ",
-			lipgloss.NewStyle().Foreground(Dim).Render(fmt.Sprintf("%d sessions", len(r.Sessions))),
-			"  ",
-			lipgloss.NewStyle().Foreground(Dim).Render(shortPath(r.ProjectPath)),
-		)
-
-		cardContent := line
-		runKey := "run:" + r.ID
-		if m.expanded[runKey] {
-			var sub strings.Builder
-			sub.WriteString("\n")
-			for _, s := range r.Sessions {
-				sub.WriteString("    ")
-				sub.WriteString(lipgloss.NewStyle().Foreground(Cyan).Render(s.AgentID))
-				sub.WriteString(" ")
-				sub.WriteString(StatusBadge(mapStatus(s.Status)))
-				sub.WriteString(" ")
-				sub.WriteString(lipgloss.NewStyle().Foreground(Dim).Render(s.Model))
-				sub.WriteString("\n")
-			}
-			cardContent += sub.String()
-		}
-
-		cardWidth := m.width - 4
-		if cardWidth < 40 {
-			cardWidth = 40
-		}
-
-		if selected {
-			b.WriteString(CardSelectedStyle.Width(cardWidth).Render(cardContent))
-		} else {
-			b.WriteString(CardStyle.Width(cardWidth).Render(cardContent))
-		}
-		b.WriteString("\n")
-	}
-
-	if len(m.runs) == 0 && !m.loading {
-		b.WriteString(lipgloss.NewStyle().Foreground(Dim).Padding(0, 2).Render("No runs found."))
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-// helpView renders the help bar.
-func (m *Model) helpView() string {
-	return HelpBarStyle.Width(m.width).Render(
-		"↑↓ nav  Enter expand  Tab switch  g toggle group  r refresh  n new run  q quit",
-	)
-}
-
-// shortID shortens a hex ID for display.
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
 }
 
 // ---------------------------------------------------------------------------
@@ -457,143 +183,203 @@ func shortID(id string) string {
 // ---------------------------------------------------------------------------
 
 func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.inputMode {
-		return m.handleInputKey(msg)
-	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
+
 	case "tab":
-		return m.switchTab()
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-		return m, nil
-	case "down", "j":
-		maxIdx := m.visibleSessionCount() - 1
-		if m.activeView == ViewRuns {
-			maxIdx = len(m.runs) - 1
-		}
-		if m.cursor < maxIdx {
-			m.cursor++
-		}
-		return m, nil
-	case "enter":
-		return m.handleEnter()
+		return m.switchPane()
+
 	case "r":
 		m.loading = true
 		return m, m.fetchRuns()
-	case "n":
-		m.inputMode = true
-		m.inputText = ""
-		return m, nil
-	case "g":
-		return m.toggleGroup()
-	case "m":
-		if m.activeView == ViewSessions {
-			if _, ok := m.sessionAtCursor(); ok {
-				m.showMenu = !m.showMenu
-				if m.showMenu {
-					if s, ok := m.sessionAtCursor(); ok {
-						m.menuTarget = s.ID
-					}
-				}
+
+	default:
+		if m.activePane == PaneLeft {
+			return m.handleAgentKey(msg)
+		}
+		return m.handleChatKey(msg)
+	}
+}
+
+func (m *Model) switchPane() (tea.Model, tea.Cmd) {
+	if m.activePane == PaneLeft {
+		m.activePane = PaneRight
+		return m, m.chatView.FocusInput()
+	}
+	m.activePane = PaneLeft
+	m.chatView.BlurInput()
+	return m, nil
+}
+
+func (m *Model) handleAgentKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if m.agentList.cursor > 0 {
+			m.agentList.cursor--
+		}
+	case "down", "j":
+		if m.agentList.cursor < len(m.agentList.agents)-1 {
+			m.agentList.cursor++
+		}
+	case "enter":
+		if len(m.agentList.agents) > 0 {
+			key := m.agentList.agents[m.agentList.cursor].ID
+			if m.agentList.expanded[key] {
+				delete(m.agentList.expanded, key)
+			} else {
+				m.agentList.expanded[key] = true
 			}
 		}
-		return m, nil
-	case "esc":
-		m.showMenu = false
-		return m, nil
 	}
 	return m, nil
 }
 
-func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		if m.inputText != "" {
-			m.loading = true
-			return m, m.createRun(m.inputText)
+		val := m.chatView.input.Value()
+		if val != "" && m.runID != "" {
+			m.chatView.loading = true
+			msgText := val
+			m.chatView.input.SetValue("")
+			return m, m.chatView.SendMessage(m.daemonURL, m.token, m.runID, msgText)
 		}
-		m.inputMode = false
 		return m, nil
 	case "esc":
-		m.inputMode = false
-		m.inputText = ""
-		return m, nil
-	case "backspace":
-		if len(m.inputText) > 0 {
-			m.inputText = m.inputText[:len(m.inputText)-1]
-		}
+		m.chatView.input.SetValue("")
 		return m, nil
 	default:
-		if len(msg.String()) == 1 {
-			m.inputText += msg.String()
-		}
-		return m, nil
+		var cmd tea.Cmd
+		m.chatView.input, cmd = m.chatView.input.Update(msg)
+		return m, cmd
 	}
 }
 
-func (m *Model) switchTab() (tea.Model, tea.Cmd) {
-	m.activeTab = (m.activeTab + 1) % 2
-	if m.activeTab == 0 {
-		m.activeView = ViewSessions
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
+// View implements tea.Model.
+func (m *Model) View() string {
+	if m.width == 0 {
+		return "Initializing..."
+	}
+
+	header := m.headerView()
+	help := m.helpView()
+
+	headerHeight := lipgloss.Height(header)
+	helpHeight := lipgloss.Height(help)
+
+	paneHeight := m.height - headerHeight - helpHeight
+	if paneHeight < 1 {
+		paneHeight = 1
+	}
+
+	var content string
+	if m.loading && len(m.runs) == 0 {
+		content = lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
+			lipgloss.NewStyle().Foreground(Dim).Render("Loading runs..."))
+	} else if m.err != nil && len(m.runs) == 0 {
+		errStr := fmt.Sprintf("Error: %v", m.err)
+		content = lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
+			lipgloss.NewStyle().Foreground(Red).Render(errStr))
 	} else {
-		m.activeView = ViewRuns
+		content = m.paneView(paneHeight)
 	}
-	m.cursor = 0
-	return m, nil
+
+	return lipgloss.JoinVertical(lipgloss.Top, header, content, help)
 }
 
-func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
-	switch m.activeView {
-	case ViewSessions:
-		if s, ok := m.sessionAtCursor(); ok {
-			key := "session:" + s.ID
-			if m.expanded[key] {
-				delete(m.expanded, key)
-			} else {
-				m.expanded[key] = true
+// headerView renders the top bar with title and current run ID.
+func (m *Model) headerView() string {
+	dot := lipgloss.NewStyle().Foreground(Accent).Render("●")
+	title := lipgloss.NewStyle().Bold(true).Foreground(Text).Render("Baton")
+	left := dot + " " + title
+
+	if m.runID != "" {
+		runStr := fmt.Sprintf("  run: %s  %s", shortID(m.runID),
+			lipgloss.NewStyle().Foreground(Dim).Render(m.runStatus()))
+
+		// Count active agents.
+		activeCount := 0
+		for _, a := range m.agentList.agents {
+			if a.Status == "running" {
+				activeCount++
 			}
 		}
-	case ViewRuns:
-		if m.cursor >= 0 && m.cursor < len(m.runs) {
-			key := "run:" + m.runs[m.cursor].ID
-			if m.expanded[key] {
-				delete(m.expanded, key)
-			} else {
-				m.expanded[key] = true
-			}
+		if activeCount > 0 {
+			runStr += lipgloss.NewStyle().Foreground(Green).Render(fmt.Sprintf("  %d active", activeCount))
 		}
+		left += runStr
 	}
-	return m, nil
+
+	return HeaderStyle.Width(m.width).Render(left)
 }
 
-// toggleGroup toggles collapse of the group containing the current session.
-func (m *Model) toggleGroup() (tea.Model, tea.Cmd) {
-	if m.activeView != ViewSessions {
-		return m, nil
-	}
-	s, ok := m.sessionAtCursor()
-	if !ok {
-		return m, nil
-	}
-	for _, g := range m.groups {
-		for _, gs := range g.Sessions {
-			if gs.ID == s.ID {
-				key := "group:" + g.Status
-				if m.collapsed[key] {
-					delete(m.collapsed, key)
-				} else {
-					m.collapsed[key] = true
-				}
-				m.clampCursor()
-				return m, nil
-			}
+// runStatus returns a human-readable run status.
+func (m *Model) runStatus() string {
+	for _, r := range m.runs {
+		if r.ID == m.runID {
+			return r.Status
 		}
 	}
-	return m, nil
+	return ""
+}
+
+// paneView renders the two-pane layout (side-by-side or stacked).
+func (m *Model) paneView(paneHeight int) string {
+	if m.width < 100 {
+		// Stack vertically on narrow terminals.
+		leftHeight := paneHeight / 2
+		rightHeight := paneHeight - leftHeight
+
+		leftView := m.agentList.View(m.width, leftHeight)
+		rightView := m.chatView.View(m.width, rightHeight)
+
+		return lipgloss.JoinVertical(lipgloss.Top, leftView, rightView)
+	}
+
+	// Side by side with a vertical border.
+	borderWidth := 1
+	leftWidth := paneWidth(m.width, true)
+	rightWidth := m.width - leftWidth - borderWidth
+	if leftWidth < 30 {
+		leftWidth = 30
+		rightWidth = m.width - leftWidth - borderWidth
+	}
+
+	leftView := m.agentList.View(leftWidth, paneHeight)
+	rightView := m.chatView.View(rightWidth, paneHeight)
+
+	// Build the vertical border to match the pane height.
+	borderText := "\n"
+	if paneHeight > 1 {
+		borderText = strings.Repeat("│\n", paneHeight)
+		borderText = strings.TrimRight(borderText, "\n")
+	}
+	border := PaneBorderStyle.Render(borderText)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftView, border, rightView)
+}
+
+// helpView renders the help bar at the bottom.
+func (m *Model) helpView() string {
+	if m.activePane == PaneLeft {
+		return HelpBarStyle.Width(m.width).Render(
+			"Tab:switch  ↑↓:nav  Enter:expand  r:refresh  Ctrl+C:quit")
+	}
+	return HelpBarStyle.Width(m.width).Render(
+		"Tab:switch  Enter:send  Esc:clear  r:refresh  Ctrl+C:quit")
+}
+
+// paneWidth computes the left pane width.
+func paneWidth(total int, isLeft bool) int {
+	if isLeft {
+		return total * 40 / 100
+	}
+	return total * 60 / 100
 }
 
 // ---------------------------------------------------------------------------
@@ -602,26 +388,27 @@ func (m *Model) toggleGroup() (tea.Model, tea.Cmd) {
 
 func (m *Model) fetchRuns() tea.Cmd {
 	return func() tea.Msg {
-		var runs []Run
-		if err := m.daemonGet("/runs", &runs); err != nil {
+		req, err := http.NewRequest(http.MethodGet, m.daemonURL+"/runs", nil)
+		if err != nil {
+			return errMsg{err}
+		}
+		m.setAuth(req)
+
+		resp, err := m.client.Do(req)
+		if err != nil {
+			return errMsg{err}
+		}
+		defer resp.Body.Close()
+
+		if err := checkResponse(resp); err != nil {
+			return errMsg{err}
+		}
+
+		var runs []RunSummary
+		if err := json.NewDecoder(resp.Body).Decode(&runs); err != nil {
 			return errMsg{err}
 		}
 		return runsLoadedMsg(runs)
-	}
-}
-
-func (m *Model) createRun(name string) tea.Cmd {
-	return func() tea.Msg {
-		body := map[string]string{
-			"project_path": name,
-			"input_type":   "manual",
-			"input_source": name,
-		}
-		var r Run
-		if err := m.daemonPost("/runs", body, &r); err != nil {
-			return errMsg{err}
-		}
-		return runCreatedMsg{}
 	}
 }
 
