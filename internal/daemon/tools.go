@@ -17,7 +17,7 @@ type ToolCall struct {
 }
 
 // ExecuteToolCall parses and executes a tool call JSON string from the brain.
-func ExecuteToolCall(runtime *agents.AgentRuntime, toolCall string) (string, error) {
+func ExecuteToolCall(runtime *agents.AgentRuntime, runStore *RunStore, runID string, toolCall string) (string, error) {
 	var tc ToolCall
 	if err := json.Unmarshal([]byte(toolCall), &tc); err != nil {
 		return "", fmt.Errorf("parse tool call: %w", err)
@@ -25,7 +25,11 @@ func ExecuteToolCall(runtime *agents.AgentRuntime, toolCall string) (string, err
 
 	switch tc.Tool {
 	case "dispatch_agent":
-		return executeDispatch(runtime, tc.Params)
+		result, err := executeDispatch(runtime, tc.Params)
+		if err == nil && runStore != nil && runID != "" {
+			updateRunStatus(runStore, runID)
+		}
+		return result, err
 	case "check_agent":
 		return executeCheck(runtime, tc.Params)
 	case "cancel_agent":
@@ -110,6 +114,19 @@ func executeCancel(runtime *agents.AgentRuntime, params map[string]string) (stri
 	}
 
 	return fmt.Sprintf(`{"agent_id": %q, "status": "cancelled"}`, id), nil
+}
+
+// updateRunStatus transitions a run from "pending" to "active" when an agent
+// is dispatched.
+func updateRunStatus(store *RunStore, runID string) {
+	r, ok := store.Get(runID)
+	if !ok || r.Status != StatusPending {
+		return
+	}
+	updated := *r
+	updated.Status = StatusActive
+	updated.UpdatedAt = time.Now()
+	store.Set(runID, &updated)
 }
 
 func executeList(runtime *agents.AgentRuntime) (string, error) {

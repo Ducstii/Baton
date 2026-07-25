@@ -21,6 +21,9 @@ type BrainSession struct {
 	ocClient     *opencode.Client
 	agentRuntime *agents.AgentRuntime
 	registry     *agents.Registry
+	store        *ConversationStore
+	runStore     *RunStore
+	runID        string
 	projectPath  string
 	modelID      string
 	providerID   string
@@ -28,7 +31,7 @@ type BrainSession struct {
 }
 
 // NewBrainSession creates or resumes a brain session.
-func NewBrainSession(ocClient *opencode.Client, runtime *agents.AgentRuntime, registry *agents.Registry, projectPath, providerID, modelID string) (*BrainSession, error) {
+func NewBrainSession(ocClient *opencode.Client, runtime *agents.AgentRuntime, registry *agents.Registry, store *ConversationStore, runStore *RunStore, runID, projectPath, providerID, modelID string) (*BrainSession, error) {
 	if providerID == "" {
 		providerID = "deepseek"
 	}
@@ -46,6 +49,9 @@ func NewBrainSession(ocClient *opencode.Client, runtime *agents.AgentRuntime, re
 		ocClient:     ocClient,
 		agentRuntime: runtime,
 		registry:     registry,
+		store:        store,
+		runStore:     runStore,
+		runID:        runID,
 		projectPath:  projectPath,
 		modelID:      modelID,
 		providerID:   providerID,
@@ -56,9 +62,27 @@ func NewBrainSession(ocClient *opencode.Client, runtime *agents.AgentRuntime, re
 		return nil, fmt.Errorf("send system prompt: %w", err)
 	}
 
-	// Wait for the brain to acknowledge the system prompt so that message
-	// tracking in SendMessage starts from a clean state.
+	// Wait for the brain to acknowledge the system prompt.
 	bs.waitForFirstResponse()
+
+	// Load existing conversation and replay as context.
+	if store != nil {
+		history, loadErr := store.LoadConversation(runID)
+		if loadErr != nil {
+			return nil, fmt.Errorf("load conversation: %w", loadErr)
+		}
+		if len(history) > 0 {
+			var ctxBuilder strings.Builder
+			ctxBuilder.WriteString("Previous conversation context (acknowledge this):\n")
+			for _, msg := range history {
+				fmt.Fprintf(&ctxBuilder, "[%s]: %s\n", msg.Role, msg.Content)
+			}
+			if err := ocClient.PromptAsync(session.ID, providerID, modelID, ctxBuilder.String()); err != nil {
+				return nil, fmt.Errorf("replay context: %w", err)
+			}
+			bs.waitForFirstResponse()
+		}
+	}
 
 	return bs, nil
 }
@@ -69,6 +93,11 @@ func NewBrainSession(ocClient *opencode.Client, runtime *agents.AgentRuntime, re
 func (b *BrainSession) SendMessage(ctx context.Context, message string) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	// Persist user message.
+	if b.store != nil {
+		_ = b.store.AppendMessage(b.runID, ChatMessage{Role: "user", Content: message, Timestamp: time.Now()})
+	}
 
 	// Get current message count to track new responses.
 	msgs, err := b.ocClient.GetMessages(b.sessionID)
@@ -92,13 +121,17 @@ func (b *BrainSession) SendMessage(ctx context.Context, message string) (string,
 		// Check for tool calls.
 		calls := extractToolCallTexts(response)
 		if len(calls) == 0 {
+			// Persist brain response.
+			if b.store != nil {
+				_ = b.store.AppendMessage(b.runID, ChatMessage{Role: "brain", Content: response, Timestamp: time.Now()})
+			}
 			return response, nil
 		}
 
 		// Execute tool calls and build results.
 		var results []string
 		for _, raw := range calls {
-			result, err := ExecuteToolCall(b.agentRuntime, raw)
+			result, err := ExecuteToolCall(b.agentRuntime, b.runStore, b.runID, raw)
 			if err != nil {
 				results = append(results, fmt.Sprintf("Tool result: {\"error\": %q}", err.Error()))
 			} else {
@@ -150,6 +183,14 @@ func (b *BrainSession) SystemPrompt() string {
 // Close shuts down the brain session.
 func (b *BrainSession) Close() error {
 	return nil
+}
+
+// LoadHistory returns the stored conversation history for this run.
+func (b *BrainSession) LoadHistory() ([]ChatMessage, error) {
+	if b.store == nil {
+		return []ChatMessage{}, nil
+	}
+	return b.store.LoadConversation(b.runID)
 }
 
 // pollNewResponse polls GetMessages until a new assistant response with a finish

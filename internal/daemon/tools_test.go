@@ -76,7 +76,7 @@ func TestExecuteToolCall_ParseFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ExecuteToolCall(nil, tt.json)
+			_, err := ExecuteToolCall(nil, nil, "", tt.json)
 			if err == nil {
 				t.Error("expected error, got nil")
 			}
@@ -96,7 +96,7 @@ func TestExecuteToolCall_MissingParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ExecuteToolCall(nil, tt.json)
+			_, err := ExecuteToolCall(nil, nil, "", tt.json)
 			if err == nil {
 				t.Error("expected error for missing params, got nil")
 			}
@@ -109,7 +109,7 @@ func TestExecuteToolCall_DispatchAgent(t *testing.T) {
 	registry := agents.NewRegistry("")
 	runtime := agents.NewAgentRuntime(mockClient, registry, "")
 
-	result, err := ExecuteToolCall(runtime, `{"tool":"dispatch_agent","params":{"name":"diagnostic","input":"test code","input_type":"code","project_dir":"."}}`)
+	result, err := ExecuteToolCall(runtime, nil, "", `{"tool":"dispatch_agent","params":{"name":"diagnostic","input":"test code","input_type":"code","project_dir":"."}}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestExecuteToolCall_ListAgents(t *testing.T) {
 	registry := agents.NewRegistry("")
 	runtime := agents.NewAgentRuntime(mockClient, registry, "")
 
-	result, err := ExecuteToolCall(runtime, `{"tool":"list_agents","params":{}}`)
+	result, err := ExecuteToolCall(runtime, nil, "", `{"tool":"list_agents","params":{}}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestExecuteToolCall_CheckAgent(t *testing.T) {
 	runtime := agents.NewAgentRuntime(mockClient, registry, "")
 
 	// First dispatch an agent so we have one to check.
-	dispatchResult, err := ExecuteToolCall(runtime, `{"tool":"dispatch_agent","params":{"name":"diagnostic","input":"test","input_type":"code","project_dir":"."}}`)
+	dispatchResult, err := ExecuteToolCall(runtime, nil, "", `{"tool":"dispatch_agent","params":{"name":"diagnostic","input":"test","input_type":"code","project_dir":"."}}`)
 	if err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestExecuteToolCall_CheckAgent(t *testing.T) {
 	}
 
 	checkJSON := `{"tool":"check_agent","params":{"id":"` + agentID + `"}}`
-	result, err := ExecuteToolCall(runtime, checkJSON)
+	result, err := ExecuteToolCall(runtime, nil, "", checkJSON)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

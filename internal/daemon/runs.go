@@ -213,7 +213,7 @@ func (d *Daemon) handleRunChat(w http.ResponseWriter, r *http.Request) {
 	brain, exists := d.brainSessions[id]
 	if !exists {
 		var err error
-		brain, err = NewBrainSession(d.ocClient, d.agentRuntime, d.registry, run.ProjectPath, "deepseek", "deepseek-v4-pro")
+		brain, err = NewBrainSession(d.ocClient, d.agentRuntime, d.registry, d.conversationStore, d.runs, id, run.ProjectPath, "deepseek", "deepseek-v4-pro")
 		if err != nil {
 			d.brainSessionsMu.Unlock()
 			writeError(w, http.StatusInternalServerError, "brain_error", fmt.Sprintf("create brain session: %v", err))
@@ -232,4 +232,23 @@ func (d *Daemon) handleRunChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"response": response,
 	})
+}
+
+func (d *Daemon) handleRunHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := d.runs.Get(id); !ok {
+		writeError(w, http.StatusNotFound, "not_found", "run not found")
+		return
+	}
+
+	messages, err := d.conversationStore.LoadConversation(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	if messages == nil {
+		messages = []ChatMessage{}
+	}
+
+	writeJSON(w, http.StatusOK, messages)
 }

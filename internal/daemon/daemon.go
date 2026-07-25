@@ -28,9 +28,10 @@ type Daemon struct {
 	server     *http.Server
 	startTime  time.Time
 
-	ocClient     *opencode.Client
-	agentRuntime *agents.AgentRuntime
-	wtBasePath   string
+	ocClient          *opencode.Client
+	agentRuntime      *agents.AgentRuntime
+	wtBasePath        string
+	conversationStore *ConversationStore
 
 	registry        *agents.Registry
 	brainSessions   map[string]*BrainSession
@@ -52,18 +53,22 @@ func New(cfg *config.Config, ocClient *opencode.Client) *Daemon {
 
 	reg := agents.NewRegistry("")
 
+	home, _ := os.UserHomeDir()
+	conversationsDir := filepath.Join(home, ".baton", "conversations")
+
 	d := &Daemon{
-		config:        cfg,
-		configPath:    config.ConfigPath(),
-		mux:           http.NewServeMux(),
-		runs:          NewRunStore(),
-		projects:      NewProjectStore(),
-		sseBroker:     NewSSEBroker(),
-		startTime:     time.Now(),
-		ocClient:      ocClient,
-		wtBasePath:    wtBasePath,
-		registry:      reg,
-		brainSessions: make(map[string]*BrainSession),
+		config:            cfg,
+		configPath:        config.ConfigPath(),
+		mux:               http.NewServeMux(),
+		runs:              NewRunStore(),
+		projects:          NewProjectStore(),
+		sseBroker:         NewSSEBroker(),
+		startTime:         time.Now(),
+		ocClient:          ocClient,
+		wtBasePath:        wtBasePath,
+		conversationStore: NewConversationStore(conversationsDir),
+		registry:          reg,
+		brainSessions:     make(map[string]*BrainSession),
 	}
 	d.agentRuntime = agents.NewAgentRuntime(ocClient, reg, wtBasePath)
 	d.registerRoutes()
@@ -78,6 +83,7 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /runs/{id}", d.auth(d.handleGetRun))
 	d.mux.HandleFunc("GET /runs/{id}/events", d.auth(d.handleRunEvents))
 	d.mux.HandleFunc("POST /runs/{id}/chat", d.auth(d.handleRunChat))
+	d.mux.HandleFunc("GET /runs/{id}/history", d.auth(d.handleRunHistory))
 
 	d.mux.HandleFunc("GET /projects", d.auth(d.handleListProjects))
 	d.mux.HandleFunc("POST /projects", d.auth(d.handleOpenProject))
