@@ -1,4 +1,3 @@
-// Package agents dispatches OpenCode sessions for code diagnosis and fixing.
 package agents
 
 import (
@@ -31,6 +30,15 @@ type WorkUnitGroup struct {
 type DiagnosticResult struct {
 	Issues    []DiagnosticIssue `json:"issues"`
 	WorkUnits []WorkUnitGroup   `json:"work_units"`
+}
+
+// FixerResult is the output from a fixer session.
+type FixerResult struct {
+	Success      bool     `json:"success"`
+	Summary      string   `json:"summary"`
+	ChangedFiles []string `json:"changed_files"`
+	BuildPassed  bool     `json:"build_passed"`
+	TestsPassed  bool     `json:"tests_passed"`
 }
 
 // pollComplete polls GetMessages until an assistant message with finish="stop"
@@ -142,35 +150,34 @@ func parseDiagnosticResult(data []byte) (*DiagnosticResult, error) {
 	return &res, nil
 }
 
-// RunDiagnostic creates an OpenCode session, sends a diagnostic prompt, waits
-// for the model to finish, and returns the parsed structured result.
+// parseFixerResult unmarshals raw JSON into a FixerResult.
+func parseFixerResult(data []byte) (*FixerResult, error) {
+	var res FixerResult
+	if err := json.Unmarshal(data, &res); err != nil {
+		return nil, fmt.Errorf("parse fixer result: %w", err)
+	}
+	return &res, nil
+}
+
+// RunDiagnostic creates an OpenCode session, sends a diagnostic prompt from the
+// agent definition, waits for the model to finish, and returns the parsed result.
 func RunDiagnostic(client *opencode.Client, projectDir, input, inputType, providerID, modelID string) (*DiagnosticResult, error) {
+	// Load the diagnostic agent definition (project > user > built-in).
+	def := DefaultDiagnostic()
+	r := NewRegistry(projectDir)
+	if d, ok := r.Get("diagnostic"); ok {
+		def = d
+	}
+
+	prompt := def.Prompt.System + "\n\n" + ExpandTemplate(def.Prompt.Template, map[string]string{
+		"input_type": inputType,
+		"input":      input,
+	})
+
 	session, err := client.CreateSession(projectDir, modelID, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
-
-	prompt := fmt.Sprintf(`You are a code diagnostician. Analyze the following input and produce a structured JSON issue list.
-
-Input type: %s
-Input: %s
-
-For each issue, provide:
-- id: unique short identifier
-- description: what is wrong
-- confidence: "high", "medium", or "low"
-- group: semantic category (e.g., "null_reference", "logic_error", "performance")
-- suspected_files: list of file paths likely containing the bug
-- dependency_edges: list of other issue IDs this issue depends on (empty if none)
-
-Group related issues into work units. A work unit is a set of related issues that should be fixed together.
-Each work unit needs:
-- id: "wu_01" style
-- description: what this work unit addresses
-- issues: list of issue IDs
-
-Respond ONLY with valid JSON, no other text. The JSON must have this exact structure:
-{"issues": [{"id": "...", "description": "...", "confidence": "...", "group": "...", "suspected_files": ["..."], "dependency_edges": ["..."]}], "work_units": [{"id": "...", "description": "...", "issues": ["..."]}]}`, inputType, input)
 
 	if err := client.PromptAsync(session.ID, providerID, modelID, prompt); err != nil {
 		return nil, fmt.Errorf("send prompt: %w", err)
@@ -187,4 +194,47 @@ Respond ONLY with valid JSON, no other text. The JSON must have this exact struc
 	}
 
 	return parseDiagnosticResult([]byte(raw))
+}
+
+// RunFixer creates an OpenCode session in the given worktree, sends a prompt
+// from the fixer agent definition, waits for completion, and returns the result.
+func RunFixer(client *opencode.Client, worktreePath string, workUnit WorkUnitGroup, providerID, modelID string) (*FixerResult, error) {
+	// Load the fixer agent definition (project > user > built-in).
+	def := DefaultFixer()
+	r := NewRegistry(worktreePath)
+	if d, ok := r.Get("fixer"); ok {
+		def = d
+	}
+
+	var issueLines []string
+	for _, issueID := range workUnit.Issues {
+		issueLines = append(issueLines, "- "+issueID)
+	}
+
+	prompt := def.Prompt.System + "\n\n" + ExpandTemplate(def.Prompt.Template, map[string]string{
+		"work_unit_id": workUnit.ID,
+		"description":  workUnit.Description,
+		"issues":       strings.Join(issueLines, "\n"),
+	})
+
+	session, err := client.CreateSession(worktreePath, modelID, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("create session: %w", err)
+	}
+
+	if err := client.PromptAsync(session.ID, providerID, modelID, prompt); err != nil {
+		return nil, fmt.Errorf("send prompt: %w", err)
+	}
+
+	text, err := pollComplete(client, session.ID, 10*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("wait for completion: %w", err)
+	}
+
+	raw := extractJSON(text)
+	if raw == "" {
+		return nil, fmt.Errorf("no JSON found in assistant response")
+	}
+
+	return parseFixerResult([]byte(raw))
 }
