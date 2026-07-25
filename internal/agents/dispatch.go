@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -41,39 +42,6 @@ type FixerResult struct {
 	TestsPassed  bool     `json:"tests_passed"`
 }
 
-// pollComplete polls GetMessages until an assistant message with finish="stop"
-// is found, or the timeout expires. It returns the concatenated text of the
-// first such assistant message.
-func pollComplete(client *opencode.Client, sessionID string, timeout time.Duration) (string, error) {
-	interval := 5 * time.Second
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		msgs, err := client.GetMessages(sessionID)
-		if err != nil {
-			return "", fmt.Errorf("get messages: %w", err)
-		}
-
-		// Walk backwards to find the most recent completed assistant message.
-		for i := len(msgs) - 1; i >= 0; i-- {
-			m := msgs[i]
-			if m.Info.Role == "assistant" && m.Info.Finish == "stop" {
-				var sb strings.Builder
-				for _, p := range m.Parts {
-					if p.Type == "text" {
-						sb.WriteString(p.Text)
-					}
-				}
-				return sb.String(), nil
-			}
-		}
-
-		time.Sleep(interval)
-	}
-
-	return "", fmt.Errorf("timeout after %v waiting for assistant response", timeout)
-}
-
 // extractJSON strips markdown fences and leading/trailing non-JSON content
 // from s, returning the first JSON object or array it finds.
 func extractJSON(s string) string {
@@ -102,8 +70,7 @@ func extractJSON(s string) string {
 	}
 	s = s[start:]
 
-	// Find matching closing bracket — crude but sufficient for one level.
-	// Walk runes to handle nesting.
+	// Find matching closing bracket -- crude but sufficient for one level.
 	var depth int
 	var inStr bool
 	for i, r := range s {
@@ -132,8 +99,8 @@ func extractJSON(s string) string {
 	return s
 }
 
-// parseDiagnosticResult unmarshals raw JSON into a DiagnosticResult.
-func parseDiagnosticResult(data []byte) (*DiagnosticResult, error) {
+// ParseDiagnosticResult unmarshals raw JSON into a DiagnosticResult.
+func ParseDiagnosticResult(data []byte) (*DiagnosticResult, error) {
 	var res DiagnosticResult
 	if err := json.Unmarshal(data, &res); err != nil {
 		return nil, fmt.Errorf("parse diagnostic result: %w", err)
@@ -150,8 +117,8 @@ func parseDiagnosticResult(data []byte) (*DiagnosticResult, error) {
 	return &res, nil
 }
 
-// parseFixerResult unmarshals raw JSON into a FixerResult.
-func parseFixerResult(data []byte) (*FixerResult, error) {
+// ParseFixerResult unmarshals raw JSON into a FixerResult.
+func ParseFixerResult(data []byte) (*FixerResult, error) {
 	var res FixerResult
 	if err := json.Unmarshal(data, &res); err != nil {
 		return nil, fmt.Errorf("parse fixer result: %w", err)
@@ -159,82 +126,130 @@ func parseFixerResult(data []byte) (*FixerResult, error) {
 	return &res, nil
 }
 
-// RunDiagnostic creates an OpenCode session, sends a diagnostic prompt from the
-// agent definition, waits for the model to finish, and returns the parsed result.
-func RunDiagnostic(client *opencode.Client, projectDir, input, inputType, providerID, modelID string) (*DiagnosticResult, error) {
-	// Load the diagnostic agent definition (project > user > built-in).
-	def := DefaultDiagnostic()
-	r := NewRegistry(projectDir)
-	if d, ok := r.Get("diagnostic"); ok {
-		def = d
+// ---------------------------------------------------------------------------
+// Backward-compatible wrappers backed by AgentRuntime
+// ---------------------------------------------------------------------------
+
+// RunDiagnostic dispatches a diagnostic agent and waits for the result.
+// It creates a temporary AgentRuntime internally for backward compatibility
+// with existing callers. New code should use AgentRuntime directly.
+func RunDiagnostic(client *opencode.Client, registry *Registry, projectDir, input, inputType, providerID, modelID string) (*DiagnosticResult, error) {
+	rt := NewAgentRuntime(client, registry, "")
+
+	params := map[string]string{
+		"input":       input,
+		"input_type":  inputType,
+		"provider_id": providerID,
+		"model_id":    modelID,
+		"project_dir": projectDir,
 	}
 
-	prompt := def.Prompt.System + "\n\n" + ExpandTemplate(def.Prompt.Template, map[string]string{
-		"input_type": inputType,
-		"input":      input,
-	})
-
-	session, err := client.CreateSession(projectDir, modelID, providerID)
+	instance, err := rt.DispatchAgent(context.Background(), "diagnostic", params)
 	if err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
+		return nil, fmt.Errorf("dispatch diagnostic: %w", err)
 	}
 
-	if err := client.PromptAsync(session.ID, providerID, modelID, prompt); err != nil {
-		return nil, fmt.Errorf("send prompt: %w", err)
+	inst := rt.WaitForAgent(context.Background(), instance.ID)
+	if inst == nil {
+		return nil, fmt.Errorf("diagnostic agent did not complete")
+	}
+	if inst.Status != StatusCompleted {
+		return nil, fmt.Errorf("diagnostic agent failed: %s", inst.Error)
 	}
 
-	text, err := pollComplete(client, session.ID, 5*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("wait for completion: %w", err)
+	raw, ok := inst.Result.(string)
+	if !ok || raw == "" {
+		return nil, fmt.Errorf("diagnostic agent returned no result data")
 	}
 
-	raw := extractJSON(text)
-	if raw == "" {
-		return nil, fmt.Errorf("no JSON found in assistant response")
-	}
-
-	return parseDiagnosticResult([]byte(raw))
+	return ParseDiagnosticResult([]byte(raw))
 }
 
-// RunFixer creates an OpenCode session in the given worktree, sends a prompt
-// from the fixer agent definition, waits for completion, and returns the result.
-func RunFixer(client *opencode.Client, worktreePath string, workUnit WorkUnitGroup, providerID, modelID string) (*FixerResult, error) {
-	// Load the fixer agent definition (project > user > built-in).
-	def := DefaultFixer()
-	r := NewRegistry(worktreePath)
-	if d, ok := r.Get("fixer"); ok {
-		def = d
-	}
+// RunFixer dispatches a fixer agent and waits for the result.
+// It creates a temporary AgentRuntime internally for backward compatibility
+// with existing callers. New code should use AgentRuntime directly.
+func RunFixer(client *opencode.Client, registry *Registry, worktreePath string, workUnit WorkUnitGroup, providerID, modelID string) (*FixerResult, error) {
+	rt := NewAgentRuntime(client, registry, "")
 
 	var issueLines []string
 	for _, issueID := range workUnit.Issues {
 		issueLines = append(issueLines, "- "+issueID)
 	}
 
-	prompt := def.Prompt.System + "\n\n" + ExpandTemplate(def.Prompt.Template, map[string]string{
-		"work_unit_id": workUnit.ID,
-		"description":  workUnit.Description,
-		"issues":       strings.Join(issueLines, "\n"),
-	})
+	params := map[string]string{
+		"work_unit_id":  workUnit.ID,
+		"description":   workUnit.Description,
+		"issues":        strings.Join(issueLines, "\n"),
+		"provider_id":   providerID,
+		"model_id":      modelID,
+		"worktree_path": worktreePath,
+	}
 
-	session, err := client.CreateSession(worktreePath, modelID, providerID)
+	instance, err := rt.DispatchAgent(context.Background(), "fixer", params)
 	if err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
+		return nil, fmt.Errorf("dispatch fixer: %w", err)
 	}
 
-	if err := client.PromptAsync(session.ID, providerID, modelID, prompt); err != nil {
-		return nil, fmt.Errorf("send prompt: %w", err)
+	inst := rt.WaitForAgent(context.Background(), instance.ID)
+	if inst == nil {
+		return nil, fmt.Errorf("fixer agent did not complete")
+	}
+	if inst.Status != StatusCompleted {
+		return nil, fmt.Errorf("fixer agent failed: %s", inst.Error)
 	}
 
-	text, err := pollComplete(client, session.ID, 10*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("wait for completion: %w", err)
+	raw, ok := inst.Result.(string)
+	if !ok || raw == "" {
+		return nil, fmt.Errorf("fixer agent returned no result data")
 	}
 
-	raw := extractJSON(text)
-	if raw == "" {
-		return nil, fmt.Errorf("no JSON found in assistant response")
+	return ParseFixerResult([]byte(raw))
+}
+
+// ---------------------------------------------------------------------------
+// Legacy helpers (kept for backward compatibility)
+// ---------------------------------------------------------------------------
+
+// pollComplete polls GetMessages until an assistant message with finish="stop"
+// is found, or the timeout expires. DEPRECATED: AgentRuntime does its own
+// polling. Kept for any existing external consumers.
+func pollComplete(client *opencode.Client, sessionID string, timeout time.Duration) (string, error) {
+	interval := 5 * time.Second
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		msgs, err := client.GetMessages(sessionID)
+		if err != nil {
+			return "", fmt.Errorf("get messages: %w", err)
+		}
+
+		for i := len(msgs) - 1; i >= 0; i-- {
+			m := msgs[i]
+			if m.Info.Role == "assistant" && m.Info.Finish == "stop" {
+				var sb strings.Builder
+				for _, p := range m.Parts {
+					if p.Type == "text" {
+						sb.WriteString(p.Text)
+					}
+				}
+				return sb.String(), nil
+			}
+		}
+
+		time.Sleep(interval)
 	}
 
-	return parseFixerResult([]byte(raw))
+	return "", fmt.Errorf("timeout after %v waiting for assistant response", timeout)
+}
+
+// parseDiagnosticResult is kept for backward compatibility within the package.
+// New code should use ParseDiagnosticResult.
+func parseDiagnosticResult(data []byte) (*DiagnosticResult, error) {
+	return ParseDiagnosticResult(data)
+}
+
+// parseFixerResult is kept for backward compatibility within the package.
+// New code should use ParseFixerResult.
+func parseFixerResult(data []byte) (*FixerResult, error) {
+	return ParseFixerResult(data)
 }

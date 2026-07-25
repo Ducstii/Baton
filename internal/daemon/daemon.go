@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Ducstii/Baton/internal/agents"
 	"github.com/Ducstii/Baton/internal/config"
 	"github.com/Ducstii/Baton/internal/opencode"
 	"github.com/Ducstii/Baton/internal/taskgraph"
@@ -28,14 +29,15 @@ type Daemon struct {
 	server     *http.Server
 	startTime  time.Time
 
-	ocClient    *opencode.Client
-	wtBasePath  string
-	taskGraphs  map[string]*taskgraph.Graph
-	taskGraphMu sync.RWMutex
+	ocClient     *opencode.Client
+	agentRuntime *agents.AgentRuntime
+	wtBasePath   string
+	taskGraphs   map[string]*taskgraph.Graph
+	taskGraphMu  sync.RWMutex
 }
 
-// New creates a new Daemon with routes registered and the M4 orchestration
-// client wired in.
+// New creates a new Daemon with routes registered, the M4 orchestration
+// client wired in, and the AgentRuntime for generic agent dispatch.
 func New(cfg *config.Config, ocClient *opencode.Client) *Daemon {
 	wtBasePath := cfg.WorktreeBasePath
 	if wtBasePath == "" {
@@ -59,6 +61,7 @@ func New(cfg *config.Config, ocClient *opencode.Client) *Daemon {
 		wtBasePath: wtBasePath,
 		taskGraphs: make(map[string]*taskgraph.Graph),
 	}
+	d.agentRuntime = agents.NewAgentRuntime(ocClient, agents.NewRegistry(""), wtBasePath)
 	d.registerRoutes()
 	return d
 }

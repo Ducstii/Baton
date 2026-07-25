@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -189,8 +191,9 @@ func (d *Daemon) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, run)
 }
 
-// runDiagnosticPhase runs the diagnostic agent, builds the task graph from the
-// resulting work units, and transitions the run to awaiting_checkpoint.
+// runDiagnosticPhase dispatches the diagnostic agent via AgentRuntime, builds
+// the task graph from the resulting work units, and transitions the run to
+// awaiting_checkpoint.
 func (d *Daemon) runDiagnosticPhase(runID string, req CreateRunRequest) {
 	log.Println("DIAG: goroutine started, runID=", runID)
 	run, ok := d.runs.Get(runID)
@@ -200,9 +203,55 @@ func (d *Daemon) runDiagnosticPhase(runID string, req CreateRunRequest) {
 
 	providerID, modelID := d.getModelForRun(run, "diagnostic")
 
-	result, err := agents.RunDiagnostic(d.ocClient, run.ProjectPath, req.Input.Content, req.Input.Type, providerID, modelID)
+	params := map[string]string{
+		"input":       req.Input.Content,
+		"input_type":  req.Input.Type,
+		"provider_id": providerID,
+		"model_id":    modelID,
+	}
+
+	instance, err := d.agentRuntime.DispatchAgent(context.Background(), "diagnostic", params)
 	if err != nil {
-		log.Printf("run %s: diagnostic failed: %v", runID, err)
+		log.Printf("run %s: diagnostic dispatch failed: %v", runID, err)
+		run.Status = StatusFailed
+		run.UpdatedAt = time.Now()
+		d.runs.Set(runID, run)
+		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
+		return
+	}
+
+	// Wait for the agent to complete.
+	inst := d.agentRuntime.WaitForAgent(context.Background(), instance.ID)
+	if inst == nil {
+		log.Printf("run %s: diagnostic agent was cancelled or context expired", runID)
+		run.Status = StatusFailed
+		run.UpdatedAt = time.Now()
+		d.runs.Set(runID, run)
+		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
+		return
+	}
+	if inst.Status != agents.StatusCompleted {
+		log.Printf("run %s: diagnostic failed: %s", runID, inst.Error)
+		run.Status = StatusFailed
+		run.UpdatedAt = time.Now()
+		d.runs.Set(runID, run)
+		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
+		return
+	}
+
+	raw, ok := inst.Result.(string)
+	if !ok || raw == "" {
+		log.Printf("run %s: diagnostic returned no result data", runID)
+		run.Status = StatusFailed
+		run.UpdatedAt = time.Now()
+		d.runs.Set(runID, run)
+		d.publishRunStatus(runID, StatusDiagnosing, StatusFailed)
+		return
+	}
+
+	result, err := agents.ParseDiagnosticResult([]byte(raw))
+	if err != nil {
+		log.Printf("run %s: parse diagnostic result: %v", runID, err)
 		run.Status = StatusFailed
 		run.UpdatedAt = time.Now()
 		d.runs.Set(runID, run)
@@ -430,7 +479,7 @@ func (d *Daemon) runFixerPhase(runID string) {
 		if len(readyNodes) == 0 {
 			stats := graph.Stats()
 			if stats[taskgraph.StatusInProgress] == 0 {
-				break // nothing running, nothing pending — all done
+				break // nothing running, nothing pending -- all done
 			}
 			// Some nodes still in progress; wait before rechecking.
 			time.Sleep(2 * time.Second)
@@ -459,8 +508,8 @@ func (d *Daemon) runFixerPhase(runID string) {
 	d.finalizeRun(runID, graph)
 }
 
-// runOneFixer creates a git worktree, dispatches the fixer agent, and updates
-// the graph node status based on the result.
+// runOneFixer creates a git worktree, dispatches the fixer agent via
+// AgentRuntime, and updates the graph node status based on the result.
 func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgraph.Node, providerID, modelID string) {
 	run, ok := d.runs.Get(runID)
 	if !ok {
@@ -495,19 +544,59 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 		return
 	}
 
-	wu := agents.WorkUnitGroup{
-		ID:          node.ID,
-		Description: node.Description,
-		Issues:      node.Issues,
+	// Build the issues string for the template.
+	var issueLines []string
+	for _, issueID := range node.Issues {
+		issueLines = append(issueLines, "- "+issueID)
 	}
 
-	result, err := agents.RunFixer(d.ocClient, wt.Path(), wu, providerID, modelID)
+	params := map[string]string{
+		"work_unit_id":  node.ID,
+		"description":   node.Description,
+		"issues":        strings.Join(issueLines, "\n"),
+		"provider_id":   providerID,
+		"model_id":      modelID,
+		"worktree_path": wt.Path(),
+	}
+
+	instance, err := d.agentRuntime.DispatchAgent(context.Background(), "fixer", params)
 	if err != nil {
-		log.Printf("run %s: fixer for %s: %v", runID, node.ID, err)
+		log.Printf("run %s: fixer dispatch for %s: %v", runID, node.ID, err)
 		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
 		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
 		return
 	}
+
+	inst := d.agentRuntime.WaitForAgent(context.Background(), instance.ID)
+	if inst == nil {
+		log.Printf("run %s: fixer for %s was cancelled", runID, node.ID)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
+		return
+	}
+	if inst.Status != agents.StatusCompleted {
+		log.Printf("run %s: fixer for %s failed: %s", runID, node.ID, inst.Error)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
+		return
+	}
+
+	raw, ok := inst.Result.(string)
+	if !ok || raw == "" {
+		log.Printf("run %s: fixer for %s returned no result data", runID, node.ID)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
+		return
+	}
+
+	result, err := agents.ParseFixerResult([]byte(raw))
+	if err != nil {
+		log.Printf("run %s: fixer parse result for %s: %v", runID, node.ID, err)
+		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
+		d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusFailed)
+		return
+	}
+
 	if !result.Success {
 		log.Printf("run %s: fixer for %s reported failure: %s", runID, node.ID, result.Summary)
 		_ = graph.SetStatus(node.ID, taskgraph.StatusFailed)
@@ -525,7 +614,7 @@ func (d *Daemon) runOneFixer(runID string, graph *taskgraph.Graph, node *taskgra
 		return
 	}
 
-	// Success — keep worktree for inspection.
+	// Success -- keep worktree for inspection.
 	_ = graph.SetStatus(node.ID, taskgraph.StatusCompleted)
 	node.WorktreePath = wt.Path()
 	d.publishTaskUpdate(runID, node.ID, taskgraph.StatusInProgress, taskgraph.StatusCompleted)
